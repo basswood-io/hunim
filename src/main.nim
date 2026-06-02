@@ -524,7 +524,7 @@ proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
       if post.desc != "": post.desc & " "
       else: ""
     let description = xmlEscape(
-      &"""{summary}<a href="{post.link}">Keep reading</a>.""")
+      &"""{summary}<div style="margin-top: 50px; font-style: italic;"><strong><a href="{post.link}">Keep reading</a>.</strong></div>""")
     rssContent &= &"""    <item>
       <title>{post.title}</title>
       <link>{post.link}</link>
