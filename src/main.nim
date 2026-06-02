@@ -1,5 +1,3 @@
-{.experimental: "parallel".}
-
 import std/[algorithm, sequtils, strformat, strutils, terminal, times, os,
     osproc, tables, threadpool]
 import std/[asynchttpserver, asyncdispatch, uri]
@@ -119,7 +117,6 @@ proc parseTemplate(content: string, compName: string,
     if closeIdx == -1:
       break
 
-    let fullMatch = newContent[openIdx .. closeIdx + 2]
     let argsStr = newContent[openIdx + compName.len + 3 .. closeIdx - 1].strip()
     let args = argsStr.split('"').filterIt(it.strip() != "")
 
@@ -127,7 +124,10 @@ proc parseTemplate(content: string, compName: string,
     for i, arg in args:
       replacedContent = replacedContent.replace("{{ $" & $(i+1) & " }}", arg)
 
-    newContent = newContent.replace(fullMatch, replacedContent)
+    # Replace only this matched span; replacing all occurrences of the match
+    # text would desync startIdx and mishandle repeated invocations.
+    newContent = newContent[0 ..< openIdx] & replacedContent &
+        newContent[closeIdx + 3 .. ^1]
     startIdx = openIdx + replacedContent.len
 
   return newContent
@@ -282,51 +282,6 @@ type BlogPost = object
   pubDate: string
   dateObj: DateTime # For sorting
 
-proc extractMetadata(baseUrl, file: string): BlogPost =
-  let text = readFile(file)
-  var
-    inHeader = false
-    title = ""
-    date = ""
-    desc = ""
-
-  for line in text.splitLines():
-    if line == "---":
-      if inHeader:
-        break
-      else:
-        inHeader = true
-        continue
-
-    if inHeader:
-      let parts = line.split(":", 1)
-      if parts.len >= 2:
-        let
-          key = parts[0].strip()
-          value = parts[1].strip()
-
-        if key == "title":
-          title = value
-        elif key == "date":
-          date = value
-        elif key == "desc":
-          desc = value
-
-  # Convert file path to URL path
-  assert file.startsWith("public/")
-
-  let urlPath = file[7..<file.len].changeFileExt("")
-  let link = &"{baseUrl}{urlPath}"
-
-  return BlogPost(
-    title: title,
-    link: link,
-    desc: desc,
-    path: file,
-    pubDate: date,
-    dateObj: parseDate(date),
-  )
-
 func initLexer(name, text: string): Lexer =
   Lexer(name: name, text: text,
       currentChar: (if text.len > 0: text[0] else: '\0'),
@@ -422,6 +377,23 @@ proc parseFrontmatter(file: string): Table[string, string] =
     elif token.kind != tkBar:
       lexer.error("frontmatter: Expected --- at the end")
 
+proc extractMetadata(baseUrl, file: string,
+    frontmatter: Table[string, string]): BlogPost =
+  if not file.startsWith("public/"):
+    error &"Expected post path under public/: {file}"
+
+  let urlPath = file[7..<file.len].changeFileExt("")
+  let date = frontmatter.getOrDefault("date", "")
+
+  return BlogPost(
+    title: frontmatter.getOrDefault("title", ""),
+    link: &"{baseUrl}{urlPath}",
+    desc: frontmatter.getOrDefault("desc", ""),
+    path: file,
+    pubDate: date,
+    dateObj: parseDate(date),
+  )
+
 proc nonFrontmatter(file: string): string =
   let text = readFile(file)
   var lexer = initLexer(file, text)
@@ -477,12 +449,11 @@ proc collectPosts(baseUrl, inputPath: string): seq[BlogPost] =
     if file.endsWith("index.md"):
       continue
 
-    if not buildDrafts:
-      let fileFrontmatter = parseFrontmatter(file)
-      if fileFrontmatter.getOrDefault("draft", "false") == "true":
-        continue
+    let frontmatter = parseFrontmatter(file)
+    if not buildDrafts and frontmatter.getOrDefault("draft", "false") == "true":
+      continue
 
-    let post = extractMetadata(baseUrl, file)
+    let post = extractMetadata(baseUrl, file, frontmatter)
     # Posts opting out of indexing are excluded from the feed and post list.
     if post.desc == "no-index":
       continue
@@ -504,9 +475,7 @@ proc generatePostList(baseUrl: string, posts: seq[BlogPost]): string =
   return lines.join("\n")
 
 proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
-    inputPath, outputPath: string) =
-  let posts = collectPosts(baseUrl, inputPath)
-
+    outputPath: string, posts: seq[BlogPost]) =
   let title = xmlEscape(frontmatter.getOrDefault("title", "RSS Feed"))
   let desc = xmlEscape(frontmatter.getOrDefault("desc", "My RSS Feed"))
   let link = xmlEscape(baseUrl)
@@ -738,10 +707,11 @@ proc main(doReload: bool) =
           let frontmatter = parseFrontmatter(indexFile)
           if frontmatter.hasKey("type") and frontmatter["type"] == "feed":
             isFeed2 = true
-            generateRSSFeed(frontmatter, lang, baseUrl, path, path / "index.xml")
+            # Collect posts once; reused by both the RSS feed and the post list.
+            let posts = collectPosts(baseUrl, path)
+            generateRSSFeed(frontmatter, lang, baseUrl, path / "index.xml", posts)
             feedRegistry[path] = frontmatter.getOrDefault("title", "RSS Feed")
-            feedPostLists[path] = generatePostList(baseUrl,
-                collectPosts(baseUrl, path))
+            feedPostLists[path] = generatePostList(baseUrl, posts)
         collectJobs(path, isFeed2, jobs)
 
   var jobs: seq[ConvertJob] = @[]
@@ -836,14 +806,16 @@ proc getMimeType(filename: string): string =
   of "":
     if fileExists(filename):
       try:
-        let content = readFile(filename)
-        if content.len > 0:
-          # Only convert the prefix needed for comparison (15 chars is enough for "<!DOCTYPE html")
-          let prefixLen = min(15, content.len)
-          let contentPrefix = content[0..<prefixLen].toLowerAscii()
-          if contentPrefix.startsWith("<!doctype html") or contentPrefix.startsWith("<html"):
-            return "text/html; charset=utf-8"
-      except:
+        # Read only the prefix needed to sniff for HTML, not the whole file.
+        var f = open(filename, fmRead)
+        defer: f.close()
+        var buf = newString(15)
+        let n = f.readBuffer(addr buf[0], buf.len)
+        buf.setLen(n)
+        let contentPrefix = buf.toLowerAscii()
+        if contentPrefix.startsWith("<!doctype html") or contentPrefix.startsWith("<html"):
+          return "text/html; charset=utf-8"
+      except CatchableError:
         discard
     return "application/octet-stream"
   else:
@@ -901,13 +873,17 @@ proc server() =
     if path == "" or path == "/":
       path = "/index.html"
 
-    # Security: prevent directory traversal
-    if path.contains(".."):
-      await req.respond(Http403, "403 Forbidden")
-      return
-
     # Build full file path
     let filePath = "public" & path
+
+    # Security: confine served files to the public root. Normalizing collapses
+    # any ".." segments, so we reject anything that escapes the root rather than
+    # blindly blocking the "" substring (which would also reject valid names).
+    let publicRoot = absolutePath("public")
+    let resolved = absolutePath(normalizedPath(filePath))
+    if resolved != publicRoot and not resolved.isRelativeTo(publicRoot):
+      await req.respond(Http403, "403 Forbidden")
+      return
 
     proc addCrossOriginHeaders(headers: var HttpHeaders) =
       headers["Cross-Origin-Opener-Policy"] = "same-origin"

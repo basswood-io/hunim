@@ -32,8 +32,13 @@ typedef struct {
 static void output_callback(const char* text, unsigned int size, void* userdata) {
   CStringBuilder* builder = (CStringBuilder*)userdata;
   if (builder->len + size > builder->cap) {
-    builder->cap = (builder->len + size) * 2;
-    builder->data = realloc(builder->data, builder->cap);
+    int new_cap = (builder->len + size) * 2;
+    char* grown = realloc(builder->data, new_cap);
+    if (grown == NULL) {
+      return; /* out of memory: drop this chunk rather than leak/segfault */
+    }
+    builder->data = grown;
+    builder->cap = new_cap;
   }
   memcpy(builder->data + builder->len, text, size);
   builder->len += size;
@@ -41,9 +46,9 @@ static void output_callback(const char* text, unsigned int size, void* userdata)
 
 int nim_md_html_wrapper(const char* input, unsigned int input_size, unsigned int flags, char** output, int* output_size) {
   CStringBuilder builder;
-  builder.data = malloc(input_size * 2);
+  builder.cap = input_size * 2 + 1;
+  builder.data = malloc(builder.cap);
   builder.len = 0;
-  builder.cap = input_size * 2;
 
   int ret = md_html(input, input_size, output_callback, &builder, flags, 0);
 
