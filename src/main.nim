@@ -13,6 +13,9 @@ var componentCache = initTable[string, string]()
 # Maps a feed directory (e.g. "public/blog") to its feed title, so feed pages
 # can advertise their RSS feed via <link rel="alternate">.
 var feedRegistry = initTable[string, string]()
+# Maps a feed directory (e.g. "public/blog") to the generated HTML list of its
+# posts, which is injected into the feed's index page via {{ .PostList }}.
+var feedPostLists = initTable[string, string]()
 var buildDrafts = false
 
 let reload = """<script>var bfr = '';
@@ -430,11 +433,27 @@ proc nonFrontmatter(file: string): string =
 
   return text[lexer.pos..^1]
 
-proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
-    inputPath, outputPath: string) =
-  var posts: seq[BlogPost] = @[]
+proc formatDisplayDate(date: string): string =
+  ## Format an RFC 2822 date as "Month d, yyyy" for display.
+  try:
+    # Try to parse RFC 2822 format with timezone abbreviation
+    let parsedDate = parse(date, "ddd, dd MMM yyyy HH:mm:ss zzz")
+    format(parsedDate, "MMMM d, yyyy")
+  except:
+    # Fall back to just the date part, e.g. "29 Jul 2024"
+    let datePart = date.split(" ")[1..3].join(" ")
+    let parsedDate = parse(datePart, "dd MMM yyyy")
+    format(parsedDate, "MMMM d, yyyy")
 
-  # Collect all blog posts
+proc renderInline(text: string): string =
+  ## Render inline markdown (e.g. backticks in a title) and strip the wrapping
+  ## paragraph so it can be embedded inside another element.
+  result = markdown(text).strip()
+  if result.startsWith("<p>") and result.endsWith("</p>"):
+    result = result[3 ..< result.len - 4].strip()
+
+proc collectPosts(baseUrl, inputPath: string): seq[BlogPost] =
+  ## Collect all blog posts in a feed directory, sorted newest first.
   for file in walkFiles(inputPath / "*.md"):
     if file.endsWith("index.md"):
       continue
@@ -444,14 +463,26 @@ proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
       if fileFrontmatter.getOrDefault("draft", "false") == "true":
         continue
 
-    let post = extractMetadata(baseUrl, file)
-    posts.add(post)
+    result.add(extractMetadata(baseUrl, file))
 
   # Sort posts by date (newest first)
-  posts.sort(proc (x, y: BlogPost): int =
+  result.sort(proc (x, y: BlogPost): int =
     # Compare dates in reverse order for newest first
-    result = cmp(y.dateObj, x.dateObj)
+    cmp(y.dateObj, x.dateObj)
   )
+
+proc generatePostList(baseUrl: string, posts: seq[BlogPost]): string =
+  ## Build the HTML list of blog posts injected into a feed's index page.
+  var lines: seq[string] = @[]
+  for post in posts:
+    let href = post.link.replace(baseUrl, "/")
+    let displayDate = formatDisplayDate(post.pubDate)
+    lines.add(&"<p><a href=\"{href}\">{renderInline(post.title)}</a> {displayDate}</p>")
+  return lines.join("\n")
+
+proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
+    inputPath, outputPath: string) =
+  let posts = collectPosts(baseUrl, inputPath)
 
   let title = frontmatter.getOrDefault("title", "RSS Feed")
   let desc = frontmatter.getOrDefault("desc", "My RSS Feed")
@@ -549,6 +580,12 @@ proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
     let dir = job.path.replace("public/", "/").replace("/index.html", "/")
     htmlContent = htmlContent.replace("href=\"./", "href=\"" & dir)
 
+  # Inject the generated list of posts into a feed's index page
+  if job.path.endsWith("/index.html") and feedPostLists.hasKey(job.path.parentDir):
+    let postList = feedPostLists[job.path.parentDir]
+    htmlContent = htmlContent.replace("<p>{{ .PostList }}</p>", postList)
+    htmlContent = htmlContent.replace("{{ .PostList }}", postList)
+
   # Prepare content for rendering
   var content = htmlContent
 
@@ -593,18 +630,7 @@ proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
     if frontmatter.hasKey("title"):
       context["Title"] = frontmatter["title"]
     if job.feedDir != "" and frontmatter.hasKey("date"):
-      let date = frontmatter["date"]
-      let displayDate =
-        try:
-          # Try to parse RFC 2822 format with timezone abbreviation
-          let parsedDate = parse(date, "ddd, dd MMM yyyy HH:mm:ss zzz")
-          format(parsedDate, "MMMM d, yyyy")
-        except:
-          # Try without timezone parsing, just use the date part
-          let datePart = date.split(" ")[1..3].join(" ") # Extract "29 Jul 2024"
-          let parsedDate = parse(datePart, "dd MMM yyyy")
-          format(parsedDate, "MMMM d, yyyy")
-      context["Date"] = displayDate
+      context["Date"] = formatDisplayDate(frontmatter["date"])
       if frontmatter.hasKey("author"):
         context["Author"] = frontmatter["author"]
 
@@ -646,6 +672,7 @@ proc main(doReload: bool) =
 
   var sitemapUrls: seq[string] = @[]
   feedRegistry.clear()
+  feedPostLists.clear()
 
   proc collectJobs(dir: string, isFeed: bool, jobs: var seq[ConvertJob]) =
     ## Recursively collect all markdown conversion jobs
@@ -676,6 +703,8 @@ proc main(doReload: bool) =
             isFeed2 = true
             generateRSSFeed(frontmatter, lang, baseUrl, path, path / "index.xml")
             feedRegistry[path] = frontmatter.getOrDefault("title", "RSS Feed")
+            feedPostLists[path] = generatePostList(baseUrl,
+                collectPosts(baseUrl, path))
         collectJobs(path, isFeed2, jobs)
 
   var jobs: seq[ConvertJob] = @[]

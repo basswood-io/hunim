@@ -37,6 +37,35 @@ Hunim will:
 3. Render each post using `templates/blog_list.html` (if it exists).
 4. Generate `public/blog/index.xml` — a valid RSS feed.
 
+## Listing posts on the index page
+
+Instead of maintaining a list of links to your posts by hand, drop a
+`{{ .PostList }}` placeholder into the feed's `index.md`. Hunim replaces it with
+the sorted (newest-first) list of posts:
+
+```markdown
+---
+title: My Blog
+type: feed
+---
+
+Welcome to my blog!
+
+{{ .PostList }}
+```
+
+Each post is rendered as a paragraph linking to the post, followed by its
+formatted publish date:
+
+```html
+<p><a href="/blog/second-post/">Second Post</a> November 19, 2024</p>
+<p><a href="/blog/hello-world/">Hello World</a> July 29, 2024</p>
+```
+
+Post titles are rendered as inline markdown, so backticks and other inline
+formatting in a title carry through. Dates are formatted as `Month d, yyyy`,
+matching the date shown on each post page.
+
 ## Feed template
 
 Create a template named after the feed directory with a `_list` suffix:
