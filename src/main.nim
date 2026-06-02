@@ -2,8 +2,10 @@ import std/[algorithm, sequtils, strformat, strutils, terminal, times, os,
     osproc, tables, threadpool]
 import std/[asynchttpserver, asyncdispatch, uri]
 
+import ./[about, md4c_wrapper]
+
 import parsetoml
-import md4c_wrapper
+
 
 # Global caches for templates and components
 var templateCache = initTable[string, string]()
@@ -937,7 +939,7 @@ when isMainModule:
   if cmd == "":
     main(doReload=false)
   elif cmd == "version":
-    echo "0.1.1"
+    echo version
   elif cmd == "newsite":
     if cmd2 == "":
       error "You must provide a site name"
