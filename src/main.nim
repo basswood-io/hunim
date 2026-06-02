@@ -74,6 +74,8 @@ proc parseDate(date: string): DateTime =
   # Parse RFC 2822 dates
 
   let explode = rsplit(date, " ", 1)
+  if explode.len < 2:
+    error &"Invalid date (expected 'ddd, dd MMM yyyy HH:mm:ss ZZZ'): \"{date}\""
   let date2 = explode[0]
   let timezone = explode[1]
 
@@ -326,8 +328,9 @@ proc extractMetadata(baseUrl, file: string): BlogPost =
   )
 
 func initLexer(name, text: string): Lexer =
-  Lexer(name: name, text: text, currentChar: text[0], state: startState,
-      line: 1, col: 1)
+  Lexer(name: name, text: text,
+      currentChar: (if text.len > 0: text[0] else: '\0'),
+      state: startState, line: 1, col: 1)
 
 proc error(self: Lexer, msg: string) =
   stderr.writeLine(&"{self.name}:{self.line}:{self.col} {msg}")
@@ -452,9 +455,12 @@ proc formatDisplayDate(date: string): string =
     # Try to parse RFC 2822 format with timezone abbreviation
     let parsedDate = parse(date, "ddd, dd MMM yyyy HH:mm:ss zzz")
     format(parsedDate, "MMMM d, yyyy")
-  except:
+  except CatchableError:
     # Fall back to just the date part, e.g. "29 Jul 2024"
-    let datePart = date.split(" ")[1..3].join(" ")
+    let parts = date.split(" ")
+    if parts.len < 4:
+      error &"Invalid date (expected 'ddd, dd MMM yyyy ...'): \"{date}\""
+    let datePart = parts[1..3].join(" ")
     let parsedDate = parse(datePart, "dd MMM yyyy")
     format(parsedDate, "MMMM d, yyyy")
 
@@ -501,21 +507,22 @@ proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
     inputPath, outputPath: string) =
   let posts = collectPosts(baseUrl, inputPath)
 
-  let title = frontmatter.getOrDefault("title", "RSS Feed")
-  let desc = frontmatter.getOrDefault("desc", "My RSS Feed")
+  let title = xmlEscape(frontmatter.getOrDefault("title", "RSS Feed"))
+  let desc = xmlEscape(frontmatter.getOrDefault("desc", "My RSS Feed"))
+  let link = xmlEscape(baseUrl)
 
   # The feed's own canonical URL, advertised via <atom:link rel="self">.
-  let selfUrl = baseUrl & outputPath.replace("public/", "")
+  let selfUrl = xmlEscape(baseUrl & outputPath.replace("public/", ""))
 
   # Generate RSS XML
   var rssContent = &"""<?xml version="1.0" encoding="UTF-8"?>
 <rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
   <channel>
     <title>{title}</title>
-    <link>{baseUrl}</link>
+    <link>{link}</link>
     <atom:link href="{selfUrl}" rel="self" type="application/rss+xml"/>
     <description>{desc}</description>
-    <language>{lang}</language>
+    <language>{xmlEscape(lang)}</language>
 """
 
   # Add items
@@ -525,11 +532,14 @@ proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
       else: ""
     let description = xmlEscape(
       &"""{summary}<div style="margin-top: 50px; font-style: italic;"><strong><a href="{post.link}">Keep reading</a>.</strong></div>""")
+    let itemTitle = xmlEscape(post.title)
+    let itemLink = xmlEscape(post.link)
+    let pubDate = xmlEscape(post.pubDate)
     rssContent &= &"""    <item>
-      <title>{post.title}</title>
-      <link>{post.link}</link>
-      <guid>{post.link}</guid>
-      <pubDate>{post.pubDate}</pubDate>
+      <title>{itemTitle}</title>
+      <link>{itemLink}</link>
+      <guid>{itemLink}</guid>
+      <pubDate>{pubDate}</pubDate>
       <description>{description}</description>
     </item>
 """
@@ -779,7 +789,7 @@ proc newSite(siteName: string) =
     "index.html",
     &"""
 <!DOCTYPE html>
-<html lang="{{ .Lang }}>
+<html lang="{{ .Lang }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">

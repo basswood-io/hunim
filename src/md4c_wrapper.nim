@@ -74,5 +74,6 @@ proc markdown*(input: string): string {.gcsafe.} =
     raise newException(ValueError, "Markdown parsing failed")
 
   result = newString(output_size)
-  copyMem(addr result[0], output, output_size)
+  if output_size > 0:
+    copyMem(addr result[0], output, output_size)
   free(output)
