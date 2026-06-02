@@ -97,6 +97,21 @@ Content goes here.
 
 Posts without a `date` appear at the end of the list (after all dated posts).
 
+### Excluding a post
+
+Set `desc: no-index` to keep a post out of both the RSS feed and the
+`{{ .PostList }}` index. The post is still built as a standalone page, but it
+also gets a `<meta name="robots" content="noindex">` tag so search engines skip
+it:
+
+```markdown
+---
+title: Draft Notes
+date: Mon, 19 Nov 2024 12:00:00 PST
+desc: no-index
+---
+```
+
 ## RSS feed
 
 Hunim generates a standards-compliant RSS 2.0 feed at `{feeddir}/index.xml`. The feed uses:

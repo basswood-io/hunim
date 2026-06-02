@@ -275,6 +275,7 @@ type
 type BlogPost = object
   title: string
   link: string
+  desc: string
   path: string      # For sorting by date
   pubDate: string
   dateObj: DateTime # For sorting
@@ -285,6 +286,7 @@ proc extractMetadata(baseUrl, file: string): BlogPost =
     inHeader = false
     title = ""
     date = ""
+    desc = ""
 
   for line in text.splitLines():
     if line == "---":
@@ -305,6 +307,8 @@ proc extractMetadata(baseUrl, file: string): BlogPost =
           title = value
         elif key == "date":
           date = value
+        elif key == "desc":
+          desc = value
 
   # Convert file path to URL path
   assert file.startsWith("public/")
@@ -315,6 +319,7 @@ proc extractMetadata(baseUrl, file: string): BlogPost =
   return BlogPost(
     title: title,
     link: link,
+    desc: desc,
     path: file,
     pubDate: date,
     dateObj: parseDate(date),
@@ -433,6 +438,14 @@ proc nonFrontmatter(file: string): string =
 
   return text[lexer.pos..^1]
 
+proc xmlEscape(text: string): string =
+  ## Escape characters that are special in XML/HTML.
+  text.replace("&", "&amp;")
+      .replace("<", "&lt;")
+      .replace(">", "&gt;")
+      .replace("\"", "&quot;")
+      .replace("'", "&#39;")
+
 proc formatDisplayDate(date: string): string =
   ## Format an RFC 2822 date as "Month d, yyyy" for display.
   try:
@@ -463,7 +476,11 @@ proc collectPosts(baseUrl, inputPath: string): seq[BlogPost] =
       if fileFrontmatter.getOrDefault("draft", "false") == "true":
         continue
 
-    result.add(extractMetadata(baseUrl, file))
+    let post = extractMetadata(baseUrl, file)
+    # Posts opting out of indexing are excluded from the feed and post list.
+    if post.desc == "no-index":
+      continue
+    result.add(post)
 
   # Sort posts by date (newest first)
   result.sort(proc (x, y: BlogPost): int =
@@ -487,23 +504,33 @@ proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
   let title = frontmatter.getOrDefault("title", "RSS Feed")
   let desc = frontmatter.getOrDefault("desc", "My RSS Feed")
 
+  # The feed's own canonical URL, advertised via <atom:link rel="self">.
+  let selfUrl = baseUrl & outputPath.replace("public/", "")
+
   # Generate RSS XML
   var rssContent = &"""<?xml version="1.0" encoding="UTF-8"?>
 <rss xmlns:atom="http://www.w3.org/2005/Atom" version="2.0">
   <channel>
     <title>{title}</title>
     <link>{baseUrl}</link>
+    <atom:link href="{selfUrl}" rel="self" type="application/rss+xml"/>
     <description>{desc}</description>
     <language>{lang}</language>
 """
 
   # Add items
   for post in posts:
+    let summary =
+      if post.desc != "": post.desc & " "
+      else: ""
+    let description = xmlEscape(
+      &"""{summary}<a href="{post.link}">Keep reading</a>.""")
     rssContent &= &"""    <item>
       <title>{post.title}</title>
       <link>{post.link}</link>
+      <guid>{post.link}</guid>
       <pubDate>{post.pubDate}</pubDate>
-      <description>{post.link}</description>
+      <description>{description}</description>
     </item>
 """
 
