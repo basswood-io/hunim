@@ -27,7 +27,7 @@ type: feed
 
 | Field | Description |
 |-------|-------------|
-| `title` | Page title. Used as `{{ .Title }}` in templates and in `<title>` and `og:title` meta tags. |
+| `title` | Page title. Used as `{{ .Title }}` in templates and in `<title>` and `og:title` meta tags. If omitted, a title is derived from the filename (see [Omitting frontmatter](#omitting-frontmatter)). |
 | `author` | Author name. Available as `{{ .Author }}` in templates. |
 | `date` | Publication date in [RFC 2822](https://www.rfc-editor.org/rfc/rfc2822) format. Available as `{{ .Date }}` (formatted as `Month DD, YYYY`). |
 | `desc` | Short description. Injected as a `<meta name="description">` and `og:description` tag via `{{ .MetaTags }}`. Use the special value `no-index` to prevent the page from appearing in the sitemap. |
@@ -60,4 +60,4 @@ desc: no-index
 
 ## Omitting frontmatter
 
-Frontmatter is optional. A Markdown file without frontmatter is still processed; `{{ .Title }}` will be empty and `{{ .MetaTags }}` will produce no output.
+Frontmatter is optional. A Markdown file without frontmatter is still processed: `{{ .Content }}` holds the rendered Markdown. When there is no `title`, the title is derived from the filename — hyphens become spaces and each word is capitalized, so `my-cool-post.md` becomes `My Cool Post`. This title is used for both `{{ .Title }}` and the `og:title` meta tag. A `desc` is still required to emit a description / `og:description` tag.

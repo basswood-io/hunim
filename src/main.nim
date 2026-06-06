@@ -364,8 +364,9 @@ proc parseFrontmatter(file: string): Table[string, string] =
   let text = readFile(file)
   var lexer = initLexer(file, text)
 
+  # Frontmatter is optional; a file without a leading `---` has no metadata.
   if getNextToken(lexer).kind != tkBar:
-    lexer.error("Expected --- at start")
+    return
 
   var token = getNextToken(lexer)
   while token.kind != tkBar:
@@ -379,6 +380,17 @@ proc parseFrontmatter(file: string): Table[string, string] =
     elif token.kind != tkBar:
       lexer.error("frontmatter: Expected --- at the end")
 
+proc titleFromFilename(file: string): string =
+  ## Derive a display title from a filename when a page has no `title`
+  ## frontmatter, e.g. "my-cool-post.md" -> "My Cool Post".
+  let words = file.splitFile().name.replace("-", " ").splitWhitespace()
+  return words.mapIt(it.capitalizeAscii()).join(" ")
+
+proc titleOf(file: string, frontmatter: Table[string, string]): string =
+  ## The page title: the `title` frontmatter if present, else derived from the
+  ## filename.
+  frontmatter.getOrDefault("title", titleFromFilename(file))
+
 proc extractMetadata(baseUrl, file: string,
     frontmatter: Table[string, string]): BlogPost =
   if not file.startsWith("public/"):
@@ -388,7 +400,7 @@ proc extractMetadata(baseUrl, file: string,
   let date = frontmatter.getOrDefault("date", "")
 
   return BlogPost(
-    title: frontmatter.getOrDefault("title", ""),
+    title: titleOf(file, frontmatter),
     link: &"{baseUrl}{urlPath}",
     desc: frontmatter.getOrDefault("desc", ""),
     path: file,
@@ -400,8 +412,9 @@ proc nonFrontmatter(file: string): string =
   let text = readFile(file)
   var lexer = initLexer(file, text)
 
+  # Frontmatter is optional; without a leading `---` the whole file is content.
   if getNextToken(lexer).kind != tkBar:
-    lexer.error("Expected --- at start")
+    return text
 
   var token = getNextToken(lexer)
   while token.kind != tkBar:
@@ -600,9 +613,9 @@ proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
   # Prepare meta tags. Values are XML-escaped so titles/descriptions containing
   # ", &, < or > don't truncate the attribute or inject stray markup.
   var metaTags = ""
-  if desc != "no-index" and frontmatter.hasKey("title"):
-    let title = xmlEscape(frontmatter["title"])
-    metaTags &= &"\n  <meta property=\"og:title\" content=\"{title}\">"
+  let pageTitle = titleOf(job.file, frontmatter)
+  if desc != "no-index" and pageTitle != "":
+    metaTags &= &"\n  <meta property=\"og:title\" content=\"{xmlEscape(pageTitle)}\">"
 
   if desc != "" and desc != "no-index":
     metaTags &= &"\n  <meta name=\"description\" content=\"{xmlEscape(desc)}\">"
@@ -637,8 +650,9 @@ proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
       error &"Template file not found in cache: {templateFile}"
     let templateContent = templateCache[templateFile]
     var context = initTable[string, string]()
-    if frontmatter.hasKey("title"):
-      context["Title"] = frontmatter["title"]
+    # A page without a `title` frontmatter falls back to a title derived from
+    # its filename, so `{{ .Title }}` is never left as a literal placeholder.
+    context["Title"] = titleOf(job.file, frontmatter)
     if job.feedDir != "" and frontmatter.hasKey("date"):
       context["Date"] = formatDisplayDate(frontmatter["date"])
       if frontmatter.hasKey("author"):
@@ -936,7 +950,7 @@ when isMainModule:
     elif cmd2 == "":
       cmd2 = paramStr(i)
 
-  if cmd == "":
+  if cmd == "" or cmd == "build":
     main(doReload=false)
   elif cmd == "version":
     echo version
