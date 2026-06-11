@@ -17,6 +17,14 @@ var feedRegistry = initTable[string, string]()
 # posts, which is injected into the feed's index page via {{ .PostList }}.
 var feedPostLists = initTable[string, string]()
 var buildDrafts = false
+# When keepMarkdown is set (via the [markdown] table in hunim.toml), each page's
+# source Markdown is published alongside its HTML at the same route with a .md
+# extension (e.g. /docs/getting-started.md), instead of being deleted after
+# conversion. stripFrontmatter drops the leading `---` block; expandTags runs
+# the component/{{ .Var }}/exec passes over the body (skipping code samples).
+var keepMarkdown = false
+var mdStripFrontmatter = true
+var mdExpandTags = true
 
 let reloadScript = """<script>var bfr = '';
   setInterval(function () {
@@ -108,24 +116,35 @@ func shouldProcessFile(path: string): bool =
 # into code and non-code spans; the three expansion passes run only over the
 # non-code spans.
 
+# A `<pre>`/`<code>` tag name must be followed by one of these so we don't trip
+# on `<predicate>` or `<codex>`.
+const tagBoundary = {'>', ' ', '\t', '\n', '\r', '/'}
+
+func htmlCodeOpenAt(content: string, i: int): string =
+  ## If a `<pre>` or `<code>` opening tag begins exactly at `i`, return its
+  ## closing tag; otherwise "".
+  if i >= content.len or content[i] != '<':
+    return ""
+  if content.continuesWith("pre", i + 1) and
+      (i + 4 >= content.len or content[i + 4] in tagBoundary):
+    return "</pre>"
+  if content.continuesWith("code", i + 1) and
+      (i + 5 >= content.len or content[i + 5] in tagBoundary):
+    return "</code>"
+  return ""
+
 func nextCodeRegion(content: string, start: int): tuple[open: int,
     closeTag: string] =
   ## Locate the next <pre>/<code> opening tag at or after `start`.
   ## Returns open = -1 when there is none.
-  const boundary = {'>', ' ', '\t', '\n', '\r', '/'}
   var i = start
   while true:
     let lt = content.find('<', i)
     if lt == -1:
       return (-1, "")
-    # Require a tag boundary after the name so we don't trip on `<predicate>`
-    # or `<codex>`.
-    if content.continuesWith("pre", lt + 1) and
-        (lt + 4 >= content.len or content[lt + 4] in boundary):
-      return (lt, "</pre>")
-    if content.continuesWith("code", lt + 1) and
-        (lt + 5 >= content.len or content[lt + 5] in boundary):
-      return (lt, "</code>")
+    let closeTag = htmlCodeOpenAt(content, lt)
+    if closeTag != "":
+      return (lt, closeTag)
     i = lt + 1
 
 iterator codeSegments(content: string): tuple[isCode: bool, text: string] =
@@ -149,6 +168,101 @@ iterator codeSegments(content: string): tuple[isCode: bool, text: string] =
     let endIdx = closeIdx + region.closeTag.len
     yield (true, content[region.open ..< endIdx])
     i = endIdx
+
+# The Markdown counterpart to codeSegments. codeSegments protects code in the
+# *converted HTML* (where samples are <pre>/<code>); when we emit a page's raw
+# Markdown rendition we must instead protect code in its *source* form — fenced
+# ``` / ~~~ blocks and inline `spans` — plus any literal HTML <pre>/<code> the
+# author wrote. Otherwise expanding tags would turn a documented `{{ nav }}`
+# example into the actual rendered component.
+
+func isMdLineStart(content: string, i: int): bool =
+  ## True when only blanks separate `i` from the previous newline, so a fence
+  ## marker at `i` opens a line. (CommonMark allows up to 3 leading spaces; we
+  ## accept any blank run since stray indentation here is harmless.)
+  var j = i - 1
+  while j >= 0 and content[j] in {' ', '\t'}:
+    dec j
+  return j < 0 or content[j] == '\n'
+
+func runLength(content: string, i: int, ch: char): int =
+  ## Count of consecutive `ch` starting at `i`.
+  var j = i
+  while j < content.len and content[j] == ch:
+    inc j
+  return j - i
+
+func lineEnd(content: string, i: int): int =
+  ## Index just past the newline ending the line containing `i` (or content.len).
+  let nl = content.find('\n', i)
+  return (if nl == -1: content.len else: nl + 1)
+
+func fencedBlockEnd(content: string, openStart: int, marker: char,
+    openLen: int): int =
+  ## Given an opening fence at `openStart`, return the index just past the
+  ## closing fence line, or content.len if the block is never closed.
+  var i = lineEnd(content, openStart)
+  while i < content.len:
+    var j = i
+    while j < content.len and content[j] in {' ', '\t'}:
+      inc j
+    if j < content.len and content[j] == marker and
+        runLength(content, j, marker) >= openLen:
+      # A closing fence may carry trailing whitespace but no other text.
+      var k = j + runLength(content, j, marker)
+      while k < content.len and content[k] in {' ', '\t'}:
+        inc k
+      if k >= content.len or content[k] == '\n':
+        return lineEnd(content, i)
+    i = lineEnd(content, i)
+  return content.len
+
+func inlineCodeEnd(content: string, openStart, runLen: int): int =
+  ## Given an inline code span opening with `runLen` backticks at `openStart`,
+  ## return the index just past the matching closing run, or -1 if unmatched
+  ## (in which case the backticks are literal text, per CommonMark).
+  var i = openStart + runLen
+  while i < content.len:
+    if content[i] == '`':
+      let rl = runLength(content, i, '`')
+      if rl == runLen:
+        return i + rl
+      i += rl
+    else:
+      inc i
+  return -1
+
+iterator mdCodeSegments(content: string): tuple[isCode: bool, text: string] =
+  ## Split raw Markdown into alternating non-code and code spans, where code is
+  ## an HTML <pre>/<code> region, a fenced ``` / ~~~ block, or an inline `span`.
+  var segStart = 0
+  var i = 0
+  while i < content.len:
+    let c = content[i]
+    var codeEnd = -1
+
+    if (c == '`' or c == '~') and isMdLineStart(content, i) and
+        runLength(content, i, c) >= 3:
+      codeEnd = fencedBlockEnd(content, i, c, runLength(content, i, c))
+    else:
+      let closeTag = htmlCodeOpenAt(content, i)
+      if closeTag != "":
+        let closeIdx = content.find(closeTag, i)
+        codeEnd = (if closeIdx == -1: content.len else: closeIdx + closeTag.len)
+      elif c == '`':
+        codeEnd = inlineCodeEnd(content, i, runLength(content, i, '`'))
+
+    if codeEnd != -1:
+      if i > segStart:
+        yield (false, content[segStart ..< i])
+      yield (true, content[i ..< codeEnd])
+      segStart = codeEnd
+      i = codeEnd
+    else:
+      inc i
+
+  if segStart < content.len:
+    yield (false, content[segStart ..< content.len])
 
 proc parseTemplateSegment(content: string, compName: string,
     compContent: string): string =
@@ -649,6 +763,46 @@ proc convertMarkdownWorker(job: ConvertJob): ConvertResult =
   let htmlOutput = markdown(nonFrontmatter(job.file))
   return ConvertResult(job: job, htmlOutput: htmlOutput)
 
+proc expandMarkdown(content: string, context: Table[string, string]): string =
+  ## Expand component, {{ .Var }}, and {{ exec }} tags in raw Markdown, leaving
+  ## code regions (see mdCodeSegments) untouched. Mirrors the HTML expansion
+  ## pipeline so the emitted .md matches the page minus its template wrapper.
+  var c = content
+  for compName, compContent in componentCache:
+    var rebuilt = ""
+    for seg in mdCodeSegments(c):
+      rebuilt &= (if seg.isCode: seg.text
+                  else: parseTemplateSegment(seg.text, compName, compContent))
+    c = rebuilt
+  for key, value in context:
+    let tag = "{{ ." & key & " }}"
+    var rebuilt = ""
+    for seg in mdCodeSegments(c):
+      rebuilt &= (if seg.isCode: seg.text else: seg.text.replace(tag, value))
+    c = rebuilt
+  result = ""
+  for seg in mdCodeSegments(c):
+    result &= (if seg.isCode: seg.text else: processExecTagsSegment(seg.text))
+
+proc writeMarkdownSource(job: ConvertJob, frontmatter: Table[string, string]) =
+  ## Publish the page's Markdown rendition at its route. The source already sits
+  ## at job.file — the same path the HTML is served from, with a .md extension —
+  ## so we overwrite it in place rather than deleting it after conversion.
+  var body =
+    if mdStripFrontmatter: nonFrontmatter(job.file)
+    else: readFile(job.file)
+  if mdExpandTags:
+    var context = initTable[string, string]()
+    context["Lang"] = job.lang
+    context["Title"] = titleOf(job.file, frontmatter)
+    # Feed posts expose Date/Author in their templates; mirror that in the body.
+    if job.feedDir != "" and frontmatter.hasKey("date"):
+      context["Date"] = formatDisplayDate(frontmatter["date"])
+      if frontmatter.hasKey("author"):
+        context["Author"] = frontmatter["author"]
+    body = expandMarkdown(body, context)
+  writeFile(job.file, body)
+
 proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
   let frontmatter = parseFrontmatter(job.file)
   var templateFile = ""
@@ -745,7 +899,10 @@ proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
     error "Expected template file"
 
   f.close()
-  removeFile(job.file)
+  if keepMarkdown:
+    writeMarkdownSource(job, frontmatter)
+  else:
+    removeFile(job.file)
 
   return sitemapUrl
 
@@ -770,6 +927,11 @@ proc main(doReload: bool) =
     error "baseURL must end with /"
 
   let lang = $table2["languageCode"]
+
+  # Optional [markdown] table. Absent keys fall back to the defaults above.
+  keepMarkdown = table2{"markdown", "keepSource"}.getBool(false)
+  mdStripFrontmatter = table2{"markdown", "stripFrontmatter"}.getBool(true)
+  mdExpandTags = table2{"markdown", "expandTags"}.getBool(true)
 
   var sitemapUrls: seq[string] = @[]
   feedRegistry.clear()
@@ -880,6 +1042,8 @@ proc getMimeType(filename: string): string =
     return "application/json; charset=utf-8"
   of ".xml":
     return "application/xml; charset=utf-8"
+  of ".md":
+    return "text/markdown; charset=utf-8"
   of ".png":
     return "image/png"
   of ".jpg", ".jpeg":

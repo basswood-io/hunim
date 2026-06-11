@@ -1,3 +1,6 @@
 baseURL = 'https://hunim.org/'
 languageCode = 'en-us'
 title = 'Hunim'
+
+[markdown]
+keepSource = true
