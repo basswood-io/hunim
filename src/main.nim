@@ -372,6 +372,15 @@ proc processExecTags(content: string): string =
   for seg in codeSegments(content):
     result &= (if seg.isCode: seg.text else: processExecTagsSegment(seg.text))
 
+proc expandExecInMarkdown(content: string): string =
+  ## Expand {{ exec }} tags in a raw Markdown body before the Markdown→HTML
+  ## conversion, skipping code regions (fences, inline spans, raw <pre>/<code>)
+  ## so documented tags stay literal. Running exec here — rather than on the
+  ## converted HTML — lets a script that emits Markdown be rendered as part of
+  ## the page instead of injected verbatim into the already-rendered HTML.
+  for seg in mdCodeSegments(content):
+    result &= (if seg.isCode: seg.text else: processExecTagsSegment(seg.text))
+
 proc processFile(path: string, baseUrl: string, doReload: bool, lang: string): string =
   # Skip non-HTML files
   let ext = path.splitFile().ext.toLowerAscii()
@@ -760,17 +769,19 @@ type ConvertJob = object
   file: string
   path: string
   feedDir: string
+  body: string  # Markdown body, frontmatter-stripped and {{ exec }}-expanded
 
 type ConvertResult = object
   job: ConvertJob
   htmlOutput: string
 
 proc convertMarkdownWorker(job: ConvertJob): ConvertResult =
-  ## Worker function that converts markdown to HTML. Exec tags are expanded
-  ## later (in processConvertedMarkdown, after the template is applied) so that,
-  ## like component and variable tags, they are never run inside a code sample —
-  ## whether written as a Markdown fence or a raw HTML block.
-  let htmlOutput = markdown(nonFrontmatter(job.file))
+  ## Worker function that converts a Markdown body to HTML. The body has already
+  ## had its {{ exec }} tags expanded (single-threaded, upstream) so a script
+  ## that emits Markdown is rendered as part of the page. Component and variable
+  ## tags are still expanded later, after the template is applied, so that — like
+  ## exec — they are never run inside a code sample.
+  let htmlOutput = markdown(job.body)
   return ConvertResult(job: job, htmlOutput: htmlOutput)
 
 proc expandMarkdown(content: string, context: Table[string, string]): string =
@@ -992,6 +1003,13 @@ proc main(doReload: bool) =
 
     # Process all jobs in parallel
     var flowVars = newSeq[FlowVar[ConvertResult]](jobs.len)
+
+    # Expand {{ exec }} tags on each Markdown body up front, single-threaded, so
+    # a script that emits Markdown is converted as part of the page rather than
+    # injected as raw text into the already-rendered HTML. Kept out of the
+    # parallel workers because exec mutates the shared execCache.
+    for i in 0 ..< jobs.len:
+      jobs[i].body = expandExecInMarkdown(nonFrontmatter(jobs[i].file))
 
     # Spawn all conversion tasks
     for i in 0 ..< jobs.len:
