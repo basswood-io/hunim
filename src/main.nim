@@ -58,6 +58,17 @@ proc error(msg: string) =
   stderr.styledWriteLine(fgRed, bgBlack, msg, resetStyle)
   quit(1)
 
+func toUnixPath(path: string): string =
+  ## Normalize OS path separators to '/'. On Windows, walkDir/walkFiles and the
+  ## `/` operator emit '\', but the URL- and prefix-rewriting throughout the
+  ## build (stripping "public/", testing for "/index.html", splitting feed dirs)
+  ## assumes '/'. Windows file APIs also accept '/', so normalizing paths as they
+  ## enter that logic keeps the string surgery correct on every platform.
+  when DirSep == '\\':
+    path.replace('\\', '/')
+  else:
+    path
+
 proc loadComponents() =
   ## Load all components from the components directory into cache
   componentCache.clear()
@@ -440,6 +451,7 @@ proc processFile(path: string, baseUrl: string, doReload: bool, lang: string): s
 
 proc processDirectory(dir: string, baseUrl: string, urls: var seq[string], doReload: bool, lang: string) =
   for kind, path in walkDir(dir):
+    let path = toUnixPath(path)
     if kind == pcFile:
       let url = processFile(path, baseUrl, doReload, lang)
       if url != "":
@@ -541,6 +553,7 @@ proc renderInline(text: string): string =
 proc collectPosts(baseUrl, inputPath: string): seq[BlogPost] =
   ## Collect all blog posts in a feed directory, sorted newest first.
   for file in walkFiles(inputPath / "*.md"):
+    let file = toUnixPath(file)
     if file.endsWith("index.md"):
       continue
 
@@ -839,6 +852,7 @@ proc main(doReload: bool) =
   proc collectJobs(dir: string, isFeed: bool, jobs: var seq[ConvertJob]) =
     ## Recursively collect all markdown conversion jobs
     for kind, path in walkDir(dir):
+      let path = toUnixPath(path)
       if kind == pcFile and path.endsWith(".md"):
         # Check if the file is a draft and should be skipped
         if not buildDrafts:
@@ -865,7 +879,8 @@ proc main(doReload: bool) =
             isFeed2 = true
             # Collect posts once; reused by both the RSS feed and the post list.
             let posts = collectPosts(baseUrl, path)
-            generateRSSFeed(frontmatter, lang, baseUrl, path / "index.xml", posts)
+            generateRSSFeed(frontmatter, lang, baseUrl,
+                toUnixPath(path / "index.xml"), posts)
             feedRegistry[path] = frontmatter.getOrDefault("title", "RSS Feed")
             feedPostLists[path] = generatePostList(baseUrl, posts)
         collectJobs(path, isFeed2, jobs)
