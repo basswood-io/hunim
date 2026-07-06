@@ -44,6 +44,12 @@ Output:
 <a href="/getting-started" class="btn">Read the docs</a>
 ```
 
+## Nesting components
+
+A component may reference other components, which are expanded recursively at build time — a `card` component can use a `button` component, which can use an `icon` component, and so on. Arguments still work at every level.
+
+Component references must be acyclic: if `a` references `b` and `b` references `a` (or a component references itself), the build fails with an error naming the cycle, e.g. `Component cycle: a -> b -> a`.
+
 ## NimScript execution
 
 Files ending in `.nims` in the `components/` directory can be run at build time. Their standard output replaces the tag in the page.

@@ -40,14 +40,16 @@ h1 span { color: var(--muted); font-weight: normal; }
 #stage { position: relative; }
 #stage svg { position: absolute; left: 0; top: 0; overflow: visible; }
 .node { position: absolute; display: flex; align-items: center;
-  padding: 0 10px; border: 1px solid var(--border);
-  border-left: 3px solid var(--kc); border-radius: 6px;
+  padding: 0 10px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--panel); cursor: pointer;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px; white-space: nowrap; overflow: hidden;
   text-overflow: ellipsis; transition: opacity .12s; }
+.node::before { content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--kc); margin-right: 8px; flex: none; }
 .node.missing { border-style: dashed; border-color: var(--missing);
   color: var(--missing); }
+.node.missing::before { background: var(--missing); }
 .colhead { position: absolute; font-size: 11px; font-weight: 600;
   letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
 path.edge { fill: none; stroke: var(--line); stroke-width: 1.5;
@@ -107,13 +109,40 @@ const pageTail = """;
     return;
   }
 
-  // ---- layout: one column per kind, nodes stacked and vertically centered
+  // ---- layout: one column per dependency level. A node's level is the
+  // longest chain of references leading to it, so pages sit at level 0 and
+  // anything they use sits to the right of everything that uses it.
   const NODE_H = 30, ROW_GAP = 14, COL_GAP = 130, PAD = 48, HEAD_H = 30;
-  const CHAR_W = 7.3, NODE_PAD = 26;
+  const CHAR_W = 7.3, NODE_PAD = 42;
 
-  const cols = KINDS.map(k => GRAPH.nodes.filter(n => n.kind === k))
-                    .filter(c => c.length);
-  cols.forEach(c => c.sort((a, b) => a.label.localeCompare(b.label)));
+  const nodeIds = new Set(GRAPH.nodes.map(n => n.id));
+  const incoming = {}; // id -> [ids that reference it]
+  for (const e of GRAPH.edges) {
+    if (!nodeIds.has(e.from) || !nodeIds.has(e.to)) continue;
+    (incoming[e.to] = incoming[e.to] || []).push(e.from);
+  }
+  const levelOf = {};
+  const visiting = new Set();
+  function levelFor(id) {
+    if (id in levelOf) return levelOf[id];
+    if (visiting.has(id)) return 0; // cycle guard (builds reject cycles)
+    visiting.add(id);
+    let lv = 0;
+    for (const from of (incoming[id] || []))
+      lv = Math.max(lv, levelFor(from) + 1);
+    visiting.delete(id);
+    levelOf[id] = lv;
+    return lv;
+  }
+  GRAPH.nodes.forEach(n => levelFor(n.id));
+
+  const maxLevel = Math.max(...GRAPH.nodes.map(n => levelOf[n.id]));
+  const cols = [];
+  for (let i = 0; i <= maxLevel; i++)
+    cols.push(GRAPH.nodes.filter(n => levelOf[n.id] === i));
+  cols.forEach(c => c.sort((a, b) =>
+    KINDS.indexOf(a.kind) - KINDS.indexOf(b.kind) ||
+    a.label.localeCompare(b.label)));
 
   const colW = cols.map(c =>
     Math.max(120, ...c.map(n =>
@@ -128,7 +157,7 @@ const pageTail = """;
     head.className = "colhead";
     head.style.left = x + "px";
     head.style.top = (PAD - 30) + "px";
-    head.textContent = KIND_LABEL[c[0].kind];
+    head.textContent = ci === 0 ? "Pages" : "Level " + ci;
     stage.appendChild(head);
 
     let y = PAD + HEAD_H + (maxH - colH[ci]) / 2;
@@ -154,9 +183,10 @@ const pageTail = """;
     const a = pos[e.from], b = pos[e.to];
     const sy = a.y + NODE_H / 2, ty = b.y + NODE_H / 2;
     let d;
-    if (a.x === b.x) {
-      // Same column (component -> component): bow out to the right, arriving
-      // at the target's right edge with a leftward arrowhead.
+    if (b.x <= a.x) {
+      // Same or earlier column (only possible on a reference cycle, which the
+      // build rejects but this viewer still draws): bow out to the right,
+      // arriving at the target's right edge with a leftward arrowhead.
       const sx = a.x + a.w, ex = b.x + b.w;
       const bow = 40 + Math.abs(ty - sy) * 0.1;
       d = `M ${sx} ${sy} C ${sx + bow} ${sy}, ${ex + bow} ${ty}, ${ex} ${ty}`

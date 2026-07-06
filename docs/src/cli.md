@@ -19,6 +19,8 @@ hunim [build] [--buildDrafts]
 |------|-------------|
 | `--buildDrafts` | Include pages with `draft: true` in the build. |
 
+Building warns on stderr about unused files: templates, components, and exec scripts that no page reaches, directly or through its template and components.
+
 ---
 
 ### `hunim server`

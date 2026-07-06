@@ -66,6 +66,9 @@ proc error(msg: string) =
   stderr.styledWriteLine(fgRed, bgBlack, msg, resetStyle)
   quit(1)
 
+proc warn(msg: string) =
+  stderr.styledWriteLine(fgYellow, msg, resetStyle)
+
 func toUnixPath(path: string): string =
   ## Normalize OS path separators to '/'. On Windows, walkDir/walkFiles and the
   ## `/` operator emit '\', but the URL- and prefix-rewriting throughout the
@@ -76,17 +79,6 @@ func toUnixPath(path: string): string =
     path.replace('\\', '/')
   else:
     path
-
-proc loadComponents() =
-  ## Load all components from the components directory into cache
-  componentCache.clear()
-  if not dirExists("components"):
-    return
-
-  for kind, comp in walkDir("components"):
-    let compName = comp.extractFilename().changeFileExt("")
-    if kind == pcFile and not compName.startsWith("."):
-      componentCache[compName] = readFile(comp).strip()
 
 proc loadTemplates() =
   ## Load all templates from the templates directory into cache
@@ -280,6 +272,44 @@ iterator mdCodeSegments(content: string): tuple[isCode: bool, text: string] =
   if segStart < content.len:
     yield (false, content[segStart ..< content.len])
 
+proc nonCodeText(content: string, isMd: bool): string =
+  ## The text with code regions removed, so tags the build leaves literal
+  ## (documentation code samples) don't count as references.
+  if isMd:
+    for seg in mdCodeSegments(content):
+      if not seg.isCode: result &= seg.text
+  else:
+    for seg in codeSegments(content):
+      if not seg.isCode: result &= seg.text
+
+proc findComponentRefs(text: string, names: seq[string]): seq[string] =
+  for name in names:
+    let pat = "{{ " & name
+    var idx = 0
+    while true:
+      let f = text.find(pat, idx)
+      if f == -1:
+        break
+      # Require a space after the name so `nav` doesn't match `{{ navbar }}`.
+      if f + pat.len < text.len and text[f + pat.len] == ' ':
+        result.add(name)
+        break
+      idx = f + 1
+
+proc findExecRefs(text: string): seq[string] =
+  var idx = 0
+  while true:
+    let openIdx = text.find("{{ exec ", idx)
+    if openIdx == -1:
+      return
+    let closeIdx = text.find(" }}", openIdx)
+    if closeIdx == -1:
+      return
+    let name = text[openIdx + 8 .. closeIdx - 1].strip()
+    if name.endsWith(".nims") and name notin result:
+      result.add(name)
+    idx = closeIdx + 3
+
 proc parseTemplateSegment(content: string, compName: string,
     compContent: string): string =
   var newContent = content
@@ -321,6 +351,45 @@ proc parseTemplate(content: string, compName: string,
   for seg in codeSegments(content):
     result &= (if seg.isCode: seg.text
                else: parseTemplateSegment(seg.text, compName, compContent))
+
+proc loadComponents() =
+  ## Load all components into cache, with nested component references already
+  ## expanded. Components are resolved dependencies-first, so a component may
+  ## freely reference other components regardless of load order; what the cache
+  ## holds is fully expanded. Component references must be acyclic — a cycle is
+  ## a build error.
+  componentCache.clear()
+  if not dirExists("components"):
+    return
+
+  var raw = initTable[string, string]()
+  var names: seq[string] = @[]
+  for kind, comp in walkDir("components"):
+    let compName = comp.extractFilename().changeFileExt("")
+    if kind == pcFile and not compName.startsWith("."):
+      raw[compName] = readFile(comp).strip()
+      names.add(compName)
+
+  # `stack` is the current depth-first resolution path; meeting a component
+  # that is already on it means the references form a cycle.
+  var stack: seq[string] = @[]
+
+  proc resolve(name: string) =
+    if componentCache.hasKey(name):
+      return
+    if name in stack:
+      error "Component cycle: " &
+          (stack[stack.find(name) .. ^1] & name).join(" -> ")
+    stack.add(name)
+    var content = raw[name]
+    for dep in findComponentRefs(nonCodeText(content, isMd = false), names):
+      resolve(dep)
+      content = parseTemplate(content, dep, componentCache[dep])
+    discard stack.pop()
+    componentCache[name] = content
+
+  for name in names:
+    resolve(name)
 
 proc renderTemplate(templateContent: string, context: Table[string,
     string]): string =
@@ -839,6 +908,194 @@ proc processConvertedMarkdown(job: ConvertJob, htmlOutput: string): string =
 
   return sitemapUrl
 
+# --- Site dependency scanning -------------------------------------------------
+# Shared by `hunim dag`, the dev server's smart rebuilds, and the build's
+# unused-file warnings. Scans src/, templates/, and components/ directly (no
+# build required) into a model of who references whom. The scan mirrors the
+# build's rules — the same template resolution (frontmatter `template`,
+# implicit feed templates, default.html) and the same code-region protection,
+# so tags shown literally in documentation code samples don't count as
+# references.
+
+proc looseFrontmatter(file: string): Table[string, string] =
+  ## Lenient counterpart to parseFrontmatter: malformed lines are skipped
+  ## rather than aborting, so the dev/dag servers stay up while a page is
+  ## mid-edit.
+  let lines = readFile(file).splitLines()
+  if lines.len == 0 or lines[0].strip() != "---":
+    return
+  var i = 1
+  while i < lines.len and lines[i].strip() != "---":
+    let colon = lines[i].find(':')
+    if colon != -1:
+      result[lines[i][0 ..< colon].strip()] = lines[i][colon + 1 .. ^1].strip()
+    inc i
+
+type
+  TagRefs = tuple[comps, scripts: seq[string]]
+  PageScan = object
+    path: string         # src path, e.g. "src/blog/post.md"
+    templateFile: string # resolved template filename; "" for raw .html pages
+    refs: TagRefs
+    feedDir: string      # the .md page's src feed directory, or ""
+  SiteScan = object
+    compNames: seq[string]
+    compPaths: Table[string, string] # component name -> source file path
+    scriptNames: seq[string]         # e.g. "version.nims"
+    templateNames: seq[string]
+    compRefs: Table[string, TagRefs] # keyed by component name
+    tmplRefs: Table[string, TagRefs] # keyed by template filename
+    pages: seq[PageScan]
+
+proc scanTagRefs(text: string, compNames: seq[string]): TagRefs =
+  (comps: findComponentRefs(text, compNames), scripts: findExecRefs(text))
+
+proc scanSite(): SiteScan =
+  var s = SiteScan()
+
+  if dirExists("components"):
+    for kind, path in walkDir("components"):
+      let path = toUnixPath(path)
+      let fname = path.extractFilename()
+      if kind != pcFile or fname.startsWith("."):
+        continue
+      if fname.endsWith(".nims"):
+        s.scriptNames.add(fname)
+      else:
+        let name = fname.changeFileExt("")
+        s.compNames.add(name)
+        s.compPaths[name] = path
+
+  if dirExists("templates"):
+    for kind, path in walkDir("templates"):
+      let fname = toUnixPath(path).extractFilename()
+      if kind == pcFile and not fname.startsWith("."):
+        s.templateNames.add(fname)
+
+  for c in s.compNames:
+    var refs = scanTagRefs(
+        nonCodeText(readFile(s.compPaths[c]), isMd = false), s.compNames)
+    refs.comps = refs.comps.filterIt(it != c)
+    s.compRefs[c] = refs
+
+  for t in s.templateNames:
+    s.tmplRefs[t] = scanTagRefs(
+        nonCodeText(readFile("templates" / t), isMd = false), s.compNames)
+
+  proc walkPages(dir: string, isFeed: bool) =
+    for kind, path in walkDir(dir):
+      let path = toUnixPath(path)
+      if kind == pcFile:
+        let ext = path.splitFile().ext.toLowerAscii()
+        if ext notin [".md", ".html"]:
+          continue
+        var page = PageScan(path: path)
+        let isMd = ext == ".md"
+        page.refs = scanTagRefs(nonCodeText(readFile(path), isMd), s.compNames)
+        if isMd:
+          if isFeed:
+            page.feedDir = dir
+          page.templateFile =
+            looseFrontmatter(path).getOrDefault("template", "default.html")
+          if isFeed and not path.endsWith("index.md"):
+            let implicit = dir.split('/')[^1] & "_list.html"
+            if implicit in s.templateNames:
+              page.templateFile = implicit
+        s.pages.add(page)
+      elif kind == pcDir:
+        let indexFile = path / "index.md"
+        var isFeed2 = false
+        if fileExists(indexFile):
+          isFeed2 = looseFrontmatter(indexFile).getOrDefault("type", "") == "feed"
+        walkPages(path, isFeed2)
+
+  if dirExists("src"):
+    walkPages("src", false)
+  return s
+
+proc reverseDeps(scan: SiteScan): Table[string, HashSet[string]] =
+  ## Map each template, component, and script source file to the set of src
+  ## pages that transitively depend on it.
+  var compClosure = initTable[string, HashSet[string]]()
+
+  proc closureOf(c: string, stack: var seq[string]): HashSet[string] =
+    ## All files component `c` pulls in: its own file, its scripts, and the
+    ## closures of the components it references (cycle-safe).
+    if compClosure.hasKey(c):
+      return compClosure[c]
+    if c in stack:
+      return initHashSet[string]()
+    stack.add(c)
+    var files = initHashSet[string]()
+    files.incl(scan.compPaths[c])
+    for sc in scan.compRefs[c].scripts:
+      files.incl("components/" & sc)
+    for c2 in scan.compRefs[c].comps:
+      files.incl(closureOf(c2, stack))
+    discard stack.pop()
+    compClosure[c] = files
+    return files
+
+  proc filesFor(refs: TagRefs): HashSet[string] =
+    var stack: seq[string] = @[]
+    for c in refs.comps:
+      result.incl(closureOf(c, stack))
+    for sc in refs.scripts:
+      result.incl("components/" & sc)
+
+  for page in scan.pages:
+    var files = filesFor(page.refs)
+    if page.templateFile in scan.tmplRefs:
+      files.incl("templates/" & page.templateFile)
+      files.incl(filesFor(scan.tmplRefs[page.templateFile]))
+    for f in files:
+      result.mgetOrPut(f, initHashSet[string]()).incl(page.path)
+
+proc feedDirOf(srcPage: string): string =
+  ## The src feed directory an .md page belongs to ("" when none): pages
+  ## directly inside a dir whose index.md declares `type: feed`, including
+  ## that index.md itself.
+  if not srcPage.endsWith(".md"):
+    return ""
+  let dir = srcPage.parentDir
+  let indexFile = dir / "index.md"
+  if fileExists(indexFile) and
+      looseFrontmatter(indexFile).getOrDefault("type", "") == "feed":
+    return dir
+  return ""
+
+proc warnUnused() =
+  ## Warn about templates, components, and exec scripts no page reaches: a
+  ## template no page resolves to, or a component/script not referenced by any
+  ## page, used template, or transitively used component.
+  let scan = scanSite()
+  var usedComps = initHashSet[string]()
+  var usedTmpls = initHashSet[string]()
+  var usedScripts = initHashSet[string]()
+
+  proc markRefs(refs: TagRefs) =
+    for sc in refs.scripts:
+      usedScripts.incl(sc)
+    for c in refs.comps:
+      if not usedComps.containsOrIncl(c):
+        markRefs(scan.compRefs[c])
+
+  for page in scan.pages:
+    markRefs(page.refs)
+    if page.templateFile in scan.tmplRefs:
+      usedTmpls.incl(page.templateFile)
+      markRefs(scan.tmplRefs[page.templateFile])
+
+  for c in scan.compNames.sorted():
+    if c notin usedComps:
+      warn &"Warning: unused component: {scan.compPaths[c]}"
+  for t in scan.templateNames.sorted():
+    if t notin usedTmpls:
+      warn &"Warning: unused template: templates/{t}"
+  for sc in scan.scriptNames.sorted():
+    if sc notin usedScripts:
+      warn &"Warning: unused exec script: components/{sc}"
+
 proc main(doReload: bool) =
   try:
     removeDir("public")
@@ -852,6 +1109,7 @@ proc main(doReload: bool) =
   # Load templates and components into cache at startup
   loadTemplates()
   loadComponents()
+  warnUnused()
 
   let table2 = parsetoml.parseFile("hunim.toml")
 
@@ -1024,199 +1282,6 @@ proc serveFile(path: string): tuple[code: HttpCode, content: string,
   except IOError:
     return (Http500, "500 Internal Server Error", "text/plain")
 
-# --- Site dependency scanning -------------------------------------------------
-# Shared by `hunim dag` and the dev server's smart rebuilds. Scans src/,
-# templates/, and components/ directly (no build required) into a model of who
-# references whom. The scan mirrors the build's rules — the same template
-# resolution (frontmatter `template`, implicit feed templates, default.html)
-# and the same code-region protection, so tags shown literally in documentation
-# code samples don't count as references.
-
-proc looseFrontmatter(file: string): Table[string, string] =
-  ## Lenient counterpart to parseFrontmatter: malformed lines are skipped
-  ## rather than aborting, so the dev/dag servers stay up while a page is
-  ## mid-edit.
-  let lines = readFile(file).splitLines()
-  if lines.len == 0 or lines[0].strip() != "---":
-    return
-  var i = 1
-  while i < lines.len and lines[i].strip() != "---":
-    let colon = lines[i].find(':')
-    if colon != -1:
-      result[lines[i][0 ..< colon].strip()] = lines[i][colon + 1 .. ^1].strip()
-    inc i
-
-proc nonCodeText(content: string, isMd: bool): string =
-  ## The text with code regions removed, so tags the build leaves literal
-  ## (documentation code samples) don't count as references.
-  if isMd:
-    for seg in mdCodeSegments(content):
-      if not seg.isCode: result &= seg.text
-  else:
-    for seg in codeSegments(content):
-      if not seg.isCode: result &= seg.text
-
-proc findComponentRefs(text: string, names: seq[string]): seq[string] =
-  for name in names:
-    let pat = "{{ " & name
-    var idx = 0
-    while true:
-      let f = text.find(pat, idx)
-      if f == -1:
-        break
-      # Require a space after the name so `nav` doesn't match `{{ navbar }}`.
-      if f + pat.len < text.len and text[f + pat.len] == ' ':
-        result.add(name)
-        break
-      idx = f + 1
-
-proc findExecRefs(text: string): seq[string] =
-  var idx = 0
-  while true:
-    let openIdx = text.find("{{ exec ", idx)
-    if openIdx == -1:
-      return
-    let closeIdx = text.find(" }}", openIdx)
-    if closeIdx == -1:
-      return
-    let name = text[openIdx + 8 .. closeIdx - 1].strip()
-    if name.endsWith(".nims") and name notin result:
-      result.add(name)
-    idx = closeIdx + 3
-
-type
-  TagRefs = tuple[comps, scripts: seq[string]]
-  PageScan = object
-    path: string         # src path, e.g. "src/blog/post.md"
-    templateFile: string # resolved template filename; "" for raw .html pages
-    refs: TagRefs
-    feedDir: string      # the .md page's src feed directory, or ""
-  SiteScan = object
-    compNames: seq[string]
-    compPaths: Table[string, string] # component name -> source file path
-    scriptNames: seq[string]         # e.g. "version.nims"
-    templateNames: seq[string]
-    compRefs: Table[string, TagRefs] # keyed by component name
-    tmplRefs: Table[string, TagRefs] # keyed by template filename
-    pages: seq[PageScan]
-
-proc scanTagRefs(text: string, compNames: seq[string]): TagRefs =
-  (comps: findComponentRefs(text, compNames), scripts: findExecRefs(text))
-
-proc scanSite(): SiteScan =
-  var s = SiteScan()
-
-  if dirExists("components"):
-    for kind, path in walkDir("components"):
-      let path = toUnixPath(path)
-      let fname = path.extractFilename()
-      if kind != pcFile or fname.startsWith("."):
-        continue
-      if fname.endsWith(".nims"):
-        s.scriptNames.add(fname)
-      else:
-        let name = fname.changeFileExt("")
-        s.compNames.add(name)
-        s.compPaths[name] = path
-
-  if dirExists("templates"):
-    for kind, path in walkDir("templates"):
-      let fname = toUnixPath(path).extractFilename()
-      if kind == pcFile and not fname.startsWith("."):
-        s.templateNames.add(fname)
-
-  for c in s.compNames:
-    var refs = scanTagRefs(
-        nonCodeText(readFile(s.compPaths[c]), isMd = false), s.compNames)
-    refs.comps = refs.comps.filterIt(it != c)
-    s.compRefs[c] = refs
-
-  for t in s.templateNames:
-    s.tmplRefs[t] = scanTagRefs(
-        nonCodeText(readFile("templates" / t), isMd = false), s.compNames)
-
-  proc walkPages(dir: string, isFeed: bool) =
-    for kind, path in walkDir(dir):
-      let path = toUnixPath(path)
-      if kind == pcFile:
-        let ext = path.splitFile().ext.toLowerAscii()
-        if ext notin [".md", ".html"]:
-          continue
-        var page = PageScan(path: path)
-        let isMd = ext == ".md"
-        page.refs = scanTagRefs(nonCodeText(readFile(path), isMd), s.compNames)
-        if isMd:
-          if isFeed:
-            page.feedDir = dir
-          page.templateFile =
-            looseFrontmatter(path).getOrDefault("template", "default.html")
-          if isFeed and not path.endsWith("index.md"):
-            let implicit = dir.split('/')[^1] & "_list.html"
-            if implicit in s.templateNames:
-              page.templateFile = implicit
-        s.pages.add(page)
-      elif kind == pcDir:
-        let indexFile = path / "index.md"
-        var isFeed2 = false
-        if fileExists(indexFile):
-          isFeed2 = looseFrontmatter(indexFile).getOrDefault("type", "") == "feed"
-        walkPages(path, isFeed2)
-
-  if dirExists("src"):
-    walkPages("src", false)
-  return s
-
-proc reverseDeps(scan: SiteScan): Table[string, HashSet[string]] =
-  ## Map each template, component, and script source file to the set of src
-  ## pages that transitively depend on it.
-  var compClosure = initTable[string, HashSet[string]]()
-
-  proc closureOf(c: string, stack: var seq[string]): HashSet[string] =
-    ## All files component `c` pulls in: its own file, its scripts, and the
-    ## closures of the components it references (cycle-safe).
-    if compClosure.hasKey(c):
-      return compClosure[c]
-    if c in stack:
-      return initHashSet[string]()
-    stack.add(c)
-    var files = initHashSet[string]()
-    files.incl(scan.compPaths[c])
-    for sc in scan.compRefs[c].scripts:
-      files.incl("components/" & sc)
-    for c2 in scan.compRefs[c].comps:
-      files.incl(closureOf(c2, stack))
-    discard stack.pop()
-    compClosure[c] = files
-    return files
-
-  proc filesFor(refs: TagRefs): HashSet[string] =
-    var stack: seq[string] = @[]
-    for c in refs.comps:
-      result.incl(closureOf(c, stack))
-    for sc in refs.scripts:
-      result.incl("components/" & sc)
-
-  for page in scan.pages:
-    var files = filesFor(page.refs)
-    if page.templateFile in scan.tmplRefs:
-      files.incl("templates/" & page.templateFile)
-      files.incl(filesFor(scan.tmplRefs[page.templateFile]))
-    for f in files:
-      result.mgetOrPut(f, initHashSet[string]()).incl(page.path)
-
-proc feedDirOf(srcPage: string): string =
-  ## The src feed directory an .md page belongs to ("" when none): pages
-  ## directly inside a dir whose index.md declares `type: feed`, including
-  ## that index.md itself.
-  if not srcPage.endsWith(".md"):
-    return ""
-  let dir = srcPage.parentDir
-  let indexFile = dir / "index.md"
-  if fileExists(indexFile) and
-      looseFrontmatter(indexFile).getOrDefault("type", "") == "feed":
-    return dir
-  return ""
-
 # --- `hunim dag` -------------------------------------------------------------
 # Serves a page that draws the scanned site model as a DAG diagram:
 # pages -> templates -> components -> exec scripts.
@@ -1257,7 +1322,8 @@ proc buildDagJson(siteTitle: string): string =
     addRefEdges("t:" & t, scan.tmplRefs[t])
 
   for c in scan.compNames:
-    addNode("c:" & c, c, "component", file = scan.compPaths[c])
+    addNode("c:" & c, scan.compPaths[c].extractFilename(), "component",
+        file = scan.compPaths[c])
     addRefEdges("c:" & c, scan.compRefs[c])
 
   for sc in scan.scriptNames:
