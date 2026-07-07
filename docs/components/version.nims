@@ -1,5 +1,8 @@
 mode = ScriptMode.Silent
 
-import ../../src/about
+import std/strutils
 
-echo about.version
+for line in readFile("../hunim.nimble").splitLines():
+  if line.startsWith("version"):
+    echo line.split('"')[1]
+    break
