@@ -1,7 +1,12 @@
+<p align="center"><a href="https://hunim.org"><img src="https://raw.githubusercontent.com/basswood-io/hunim/master/docs/src/logo.svg?sanitize=true" alt="Hunim" width="300"></a></p>
+
+Awesome static site generator by [basswood-io](https://basswood.io) in Nim.
+
+---
 
 ## Overview
 
-Hunim is a static site generator written in [Nim](https://nim-lang.org). Small, fast, and unopinionated, it's ready to meet your needs.
+Hunim is a static site generator written in the Nim programming language. Small, fast, and unopinionated, it's ready to meet your needs.
 
 ## Choose How to Install
 
@@ -38,10 +43,3 @@ hunim
 
 This publishing the files to the `public` directory.
 
-## Features
-
-Run NimScript with:
-```
-{{ exec my_script.nims }}
-```
-This will replace the contents with the output of the script in `components/my_script.nims`.
