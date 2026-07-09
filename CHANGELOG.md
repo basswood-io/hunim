@@ -1,4 +1,4 @@
-# 0.4.1
+# 0.5.0
 
 ## Features
  - Builds now warn about unused templates, components, and exec scripts — files no page reaches, directly or through its template and components
