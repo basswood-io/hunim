@@ -52,6 +52,7 @@ var highlightCode = true
 # config (a hunim.toml change always takes the full-rebuild path).
 var siteBaseUrl = ""
 var siteLang = ""
+var generatedTitleCase = "titlecase"
 
 let reloadScript = """<script>var bfr = '';
   setInterval(function () {
@@ -635,7 +636,14 @@ proc titleFromFilename(file: string): string =
   ## Derive a display title from a filename when a page has no `title`
   ## frontmatter, e.g. "my-cool-post.md" -> "My Cool Post".
   let words = file.splitFile().name.replace("-", " ").splitWhitespace()
-  return words.mapIt(it.capitalizeAscii()).join(" ")
+  let title = words.mapIt(it.capitalizeAscii()).join(" ")
+  case generatedTitleCase
+  of "uppercase":
+    return title.toUpperAscii()
+  of "lowercase":
+    return title.toLowerAscii()
+  else:
+    return title
 
 proc titleOf(file: string, frontmatter: Table[string, string]): string =
   ## The page title: the `title` frontmatter if present, else derived from the
@@ -1367,6 +1375,11 @@ proc main(doReload: bool) =
   let baseUrl = siteBaseUrl
   let lang = siteLang
 
+  generatedTitleCase = table2.getOrDefault("titleCase").getStr(
+      "titlecase").toLowerAscii()
+  if generatedTitleCase notin ["titlecase", "uppercase", "lowercase"]:
+    error "titleCase must be one of: titlecase, uppercase, lowercase"
+
   # Optional [markdown] table. Absent keys fall back to the defaults above.
   keepMarkdown = table2{"markdown", "keepSource"}.getBool(false)
   mdStripFrontmatter = table2{"markdown", "stripFrontmatter"}.getBool(true)
@@ -1458,7 +1471,7 @@ proc newSite(siteName: string) =
 
   writeFile(
     "hunim.toml",
-    &"baseURL = 'https://{siteName}.com/'\nlanguageCode = 'en-us'\ntitle = '{siteName}'\n"
+    &"baseURL = 'https://{siteName}.com/'\nlanguageCode = 'en-us'\ntitle = '{siteName}'\ntitleCase = 'titlecase'\n"
   )
 
   createDir("components")

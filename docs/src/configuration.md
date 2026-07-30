@@ -13,9 +13,10 @@ Every Hunim site has a `hunim.toml` file at the project root. This file controls
 baseURL      = 'https://example.com/'
 languageCode = 'en-us'
 title        = 'My Site'
+titleCase    = 'titlecase'
 ```
 
-All three fields are required.
+The first three fields are required. `titleCase` is optional.
 
 ## Fields
 
@@ -24,6 +25,7 @@ All three fields are required.
 | `baseURL` | string | The root URL of your deployed site. **Must end with `/`**. Used for sitemap URLs and RSS feed links. |
 | `languageCode` | string | An [RFC 5646](https://www.rfc-editor.org/rfc/rfc5646) language tag (e.g. `en-us`, `fr`, `de`). Exposed as `{{ .Lang }}` in templates. |
 | `title` | string | The name of your site. Used in RSS feed metadata. |
+| `titleCase` | string | Controls titles generated from filenames when frontmatter has no `title`: `titlecase` (default), `uppercase`, or `lowercase`. Explicit frontmatter titles are unchanged. |
 
 ## Publishing Markdown source
 
@@ -65,6 +67,7 @@ enabled = false   # default true
 baseURL      = 'https://mysite.dev/'
 languageCode = 'en-us'
 title        = 'My Awesome Site'
+titleCase    = 'uppercase'
 ```
 
 > The `baseURL` must end with a trailing slash, otherwise sitemap and feed URLs will be malformed.
