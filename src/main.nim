@@ -1488,6 +1488,9 @@ mimeDb.register("avif", "image/avif")
 
 proc getMimeType(filename: string): string =
   let ext = splitFile(filename).ext.toLowerAscii()
+  if ext.len > 1 and ext[1 .. ^1].allCharsInSet({'0'..'9'}):
+    return "text/html; charset=utf-8"
+
   if ext == "":
     # Extensionless clean-URL page: sniff for HTML, otherwise treat as binary.
     if fileExists(filename):
