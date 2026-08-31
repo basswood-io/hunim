@@ -43,10 +43,10 @@ mysite/
 ## Start the dev server
 
 ```cmd
-hunim server
+hunim serve
 ```
 
-The server runs at `http://127.0.0.1:8080` and automatically rebuilds whenever you save a file. Press `Ctrl+C` to stop.
+The server runs at `http://127.0.0.1:8080` and automatically rebuilds whenever you save a file. Use `hunim serve --host 0.0.0.0 --port 8080` when it needs to be reachable from another machine. Press `Ctrl+C` to stop.
 
 ## Build for production
 

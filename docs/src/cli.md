@@ -5,6 +5,17 @@ desc: All Hunim commands and flags.
 
 # CLI Reference
 
+## Global usage
+
+```cmd
+hunim --help
+hunim --version
+```
+
+`--help` (or `-h`) prints help without running a command. `--version` (or
+`-V`) prints the version as `hunim <version>`. Run `hunim <command> --help`
+for concise command-specific help.
+
 ## Commands
 
 ### `hunim` / `hunim build`
@@ -23,15 +34,15 @@ Building warns on stderr about unused files: templates, components, and exec scr
 
 ---
 
-### `hunim server`
+### `hunim serve`
 
 Start the development server with hot reload.
 
 ```cmd
-hunim server [--buildDrafts]
+hunim serve [options]
 ```
 
-- Serves the built site at `http://127.0.0.1:8080`.
+- Serves the built site at `http://127.0.0.1:8080` by default.
 - Watches `src/`, `templates/`, `components/`, and `hunim.toml`, and rebuilds only what a change affects:
   - An edited page rebuilds just that page.
   - An edited template, component, or exec script rebuilds the pages that (transitively) use it — nothing else.
@@ -43,7 +54,17 @@ hunim server [--buildDrafts]
 
 | Flag | Description |
 |------|-------------|
+| `--host <address>` | Bind address (default: `127.0.0.1`). |
+| `-p, --port <port>` | Bind port from 1 to 65535 (default: `8080`). |
 | `--buildDrafts` | Include draft pages in the server build. |
+
+`hunim server` is retained as an alias. For example:
+
+```cmd
+hunim serve
+hunim serve --port 8080
+hunim serve --host 0.0.0.0 --port 8080
+```
 
 ---
 
@@ -55,7 +76,7 @@ Serve an interactive diagram of the site's structure as a DAG.
 hunim dag
 ```
 
-- Serves at `http://127.0.0.1:8081` (a different port than `hunim server`, so both can run at once).
+- Serves at `http://127.0.0.1:8081` (a different port than `hunim serve`, so both can run at once).
 - Draws every page, template, component, and exec script as a node, with edges for the `template` frontmatter key (including implicit feed templates), component invocations, and exec tags.
 - Hover a node to trace everything it depends on and everything that uses it; click to pin the highlight.
 - A template that is referenced but doesn't exist in `templates/` is flagged as missing.
@@ -92,6 +113,8 @@ Print the installed version number and exit.
 ```cmd
 hunim version
 ```
+
+This is equivalent to `hunim --version`.
 
 ## Build output
 

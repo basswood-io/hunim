@@ -30,8 +30,13 @@ cd mysite
 
 Start the development server:
 ```
-hunim server
+hunim serve
 ```
+
+See the available commands and options with `hunim --help`. The development
+server defaults to `127.0.0.1:8080`; use `hunim serve --host 0.0.0.0 --port
+8080` to choose a different interface and port. `hunim server` remains
+supported as an alias.
 
 `Ctrl^C` to stop.
 
@@ -42,4 +47,3 @@ hunim
 ```
 
 This publishing the files to the `public` directory.
-

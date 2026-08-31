@@ -2,7 +2,7 @@ import std/[algorithm, atomics, json, sequtils, sets, strformat, strutils,
     terminal, times, os, osproc, tables, typedthreads, mimetypes, xmltree]
 import std/[asynchttpserver, asyncdispatch, uri]
 
-import ./[dag, highlight, md4c_wrapper]
+import ./[cli, dag, highlight, md4c_wrapper]
 
 import parsetoml
 
@@ -1814,9 +1814,9 @@ proc smartRebuild(added, removed, modified: seq[string]) =
     stderr.styledWriteLine(fgRed, "Rebuild failed: " & getCurrentExceptionMsg())
     stderr.resetAttributes()
 
-proc server() =
-  let port = 8080
-  let address = "127.0.0.1"
+proc server(options: ServerOptions) =
+  let port = options.port
+  let address = options.host
 
   var httpServer = newAsyncHttpServer()
   var snapshot = snapshotInputs()
@@ -1886,29 +1886,30 @@ proc server() =
   waitFor httpServer.serve(Port(port), handleRequest, address)
 
 when isMainModule:
-  var cmd = ""
-  var cmd2 = ""
+  var config: CliConfig
+  try:
+    config = parseCli(commandLineParams())
+  except CliError as e:
+    stderr.writeLine("Error: " & e.msg)
+    quit(2)
 
-  for i in 1..paramCount():
-    if paramStr(i) == "--buildDrafts" or paramStr(i) == "-D":
-      buildDrafts = true
-    elif not paramStr(i).startsWith("-") and cmd == "":
-      cmd = paramStr(i)
-    elif cmd2 == "":
-      cmd2 = paramStr(i)
+  if config.showHelp:
+    stdout.write(helpText(config.command))
+    quit(0)
+  if config.showVersion or config.command == commandVersion:
+    echo "hunim " & version
+    quit(0)
 
-  if cmd == "" or cmd == "build":
+  buildDrafts = config.buildDrafts
+  case config.command
+  of commandBuild:
     main(doReload=false)
-  elif cmd == "version":
-    echo version
-  elif cmd == "newsite":
-    if cmd2 == "":
-      error "You must provide a site name"
-    newSite(cmd2)
-  elif cmd == "server":
+  of commandNewsite:
+    newSite(config.newsiteName)
+  of commandServe:
     rebuild(doReload=true)
-    server()
-  elif cmd == "dag":
+    server(config.server)
+  of commandDag:
     dagServer()
-  else:
-    error &"Unknown command: {cmd}"
+  of commandVersion:
+    discard

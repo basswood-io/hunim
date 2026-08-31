@@ -74,4 +74,4 @@ Templates can include [components](/components) using the component name syntax:
 
 ## Auto-reload
 
-When you run `hunim server`, a small polling script is injected automatically before the closing `</head>` of every page, so the browser refreshes on file changes. You don't need to add anything to your templates, and production builds (`hunim build`) contain no such script.
+When you run `hunim serve`, a small polling script is injected automatically before the closing `</head>` of every page, so the browser refreshes on file changes. You don't need to add anything to your templates, and production builds (`hunim build`) contain no such script.
