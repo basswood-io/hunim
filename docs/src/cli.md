@@ -13,8 +13,8 @@ hunim --version
 ```
 
 `--help` (or `-h`) prints help without running a command. `--version` (or
-`-V`) prints the version as `hunim <version>`. Run `hunim <command> --help`
-for concise command-specific help.
+`-V`) prints the version as `hunim <version>`. Run `hunim <command> --help` or
+`hunim help <command>` for concise command-specific help.
 
 ## Commands
 

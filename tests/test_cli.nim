@@ -29,6 +29,16 @@ suite "CLI parsing":
     check config.command == commandServe
     check helpText(config.command).find("--port") >= 0
 
+  test "help command selects a command":
+    let config = parseCli(@["help", "serve"])
+    check config.command == commandServe
+    check config.showHelp
+
+    let buildConfig = parseCli(@["help", "build"])
+    check buildConfig.command == commandBuild
+    check buildConfig.showHelp
+    check helpText(buildConfig.command).find("--buildDrafts") >= 0
+
   test "invalid ports are rejected":
     expect CliError:
       discard parseCli(@["serve", "--port", "banana"])

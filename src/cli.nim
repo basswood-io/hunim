@@ -54,6 +54,7 @@ proc parseCli*(args: seq[string]): CliConfig =
       ], mode = LaxMode)
   var positional: seq[string] = @[]
   var commandSet = false
+  var helpCommand = false
   var hostSet = false
   var portSet = false
 
@@ -72,6 +73,9 @@ proc parseCli*(args: seq[string]): CliConfig =
         of "dag": result.command = commandDag
         of "newsite": result.command = commandNewsite
         of "version": result.command = commandVersion
+        of "help":
+          result.command = commandBuild
+          helpCommand = true
         else:
           raise cliError(&"Unknown command: {parser.key}\nTry 'hunim --help' for usage.")
         commandSet = true
@@ -93,6 +97,21 @@ proc parseCli*(args: seq[string]): CliConfig =
         hostSet = true
       else:
         raise cliError(&"Unknown option: --{key}\nTry 'hunim --help' for usage.")
+
+  if helpCommand:
+    if positional.len > 2:
+      raise cliError("Usage: hunim help [command]")
+    if positional.len == 2:
+      let target = positional[1].toLowerAscii()
+      case target
+      of "", "build": result.command = commandBuild
+      of "serve", "server": result.command = commandServe
+      of "dag": result.command = commandDag
+      of "newsite": result.command = commandNewsite
+      of "version": result.command = commandVersion
+      else:
+        raise cliError(&"Unknown command: {positional[1]}\nTry 'hunim --help' for usage.")
+    result.showHelp = true
 
   if result.showHelp or result.showVersion:
     return
@@ -121,6 +140,7 @@ Commands:
   dag         Serve the dependency graph viewer
   newsite     Create a new site directory
   version     Print the installed version
+  help        Show help for a command
 
 Options:
   -h, --help       Show this help
