@@ -147,7 +147,7 @@ Options:
   -V, --version    Show the version
   -D, --buildDrafts Include draft pages in the build
 
-Use 'hunim <command> --help' for command-specific help.
+Use 'hunim <command> --help' or 'hunim help <command>' for command-specific help.
 """
   of commandServe:
     result = &"""Run the development server with hot reload.
