@@ -54,7 +54,7 @@ hunim serve [options]
 
 | Flag | Description |
 |------|-------------|
-| `--host <address>` | Bind address (default: `127.0.0.1`). |
+| `--host <address[:port]>` | Bind address (default: `127.0.0.1`); accepts an optional port. |
 | `-p, --port <port>` | Bind port from 1 to 65535 (default: `8080`). |
 | `--buildDrafts` | Include draft pages in the server build. |
 
@@ -64,6 +64,7 @@ hunim serve [options]
 hunim serve
 hunim serve --port 8080
 hunim serve --host 0.0.0.0 --port 8080
+hunim serve --host 0.0.0.0:4545
 ```
 
 ---

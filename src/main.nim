@@ -1629,7 +1629,10 @@ proc dagServer() =
   stdout.styledWriteLine(fgYellow, "Press Ctrl+C to stop")
   stdout.resetAttributes()
 
-  waitFor httpServer.serve(Port(port), handleRequest, address)
+  try:
+    waitFor httpServer.serve(Port(port), handleRequest, address)
+  except OSError as e:
+    error &"Could not bind to {address}:{port}: {e.msg}"
 
 proc rebuild(doReload: bool) =
   stdout.styledWriteLine(fgCyan, "Rebuilding site...")
@@ -1883,7 +1886,10 @@ proc server(options: ServerOptions) =
 
   asyncCheck checkForChanges()
 
-  waitFor httpServer.serve(Port(port), handleRequest, address)
+  try:
+    waitFor httpServer.serve(Port(port), handleRequest, address)
+  except OSError as e:
+    error &"Could not bind to {address}:{port}: {e.msg}"
 
 when isMainModule:
   var config: CliConfig

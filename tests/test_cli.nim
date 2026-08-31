@@ -15,6 +15,19 @@ suite "CLI parsing":
     check config.server.host == "0.0.0.0"
     check config.server.port == 8081
 
+  test "host accepts an optional port":
+    let config = parseCli(@["serve", "--host", "0.0.0.0:4545"])
+    check config.server.host == "0.0.0.0"
+    check config.server.port == 4545
+
+    let ipv6 = parseCli(@["serve", "--host", "::1"])
+    check ipv6.server.host == "::1"
+    check ipv6.server.port == defaultServerPort
+
+    let bracketed = parseCli(@["serve", "--host", "[::1]:4545"])
+    check bracketed.server.host == "::1"
+    check bracketed.server.port == 4545
+
   test "server remains an alias":
     check parseCli(@["server"]).command == commandServe
 

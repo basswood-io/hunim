@@ -44,6 +44,35 @@ proc parsePort(value: string): int =
   if result < 1 or result > 65535:
     raise cliError(&"Port must be between 1 and 65535: {value}")
 
+proc parseHost(value: string): tuple[host: string, port: int, hasPort: bool] =
+  if value.startsWith("["):
+    let close = value.find(']')
+    if close < 0:
+      raise cliError(&"Invalid host: {value}")
+    result.host = value[1 ..< close]
+    if result.host == "":
+      raise cliError(&"Invalid host: {value}")
+    let suffix = value[close + 1 .. ^1]
+    if suffix != "":
+      if not suffix.startsWith(":"):
+        raise cliError(&"Invalid host: {value}")
+      result.port = parsePort(suffix[1 .. ^1])
+      result.hasPort = true
+    return
+
+  if value.count(':') == 1:
+    let separator = value.find(':')
+    result.host = value[0 ..< separator]
+    if result.host == "":
+      raise cliError(&"Invalid host: {value}")
+    result.port = parsePort(value[separator + 1 .. ^1])
+    result.hasPort = true
+  else:
+    result.host = value
+
+  if result.host == "":
+    raise cliError(&"Invalid host: {value}")
+
 proc parseCli*(args: seq[string]): CliConfig =
   result.command = commandBuild
   result.server = ServerOptions(host: defaultServerHost, port: defaultServerPort)
@@ -93,7 +122,10 @@ proc parseCli*(args: seq[string]): CliConfig =
       of "host":
         if parser.val == "":
           raise cliError("Missing value for --host")
-        result.server.host = parser.val
+        let parsedHost = parseHost(parser.val)
+        result.server.host = parsedHost.host
+        if parsedHost.hasPort and not portSet:
+          result.server.port = parsedHost.port
         hostSet = true
       else:
         raise cliError(&"Unknown option: --{key}\nTry 'hunim --help' for usage.")
@@ -156,7 +188,7 @@ Usage:
   hunim serve [options]
 
 Options:
-  --host <address>  Bind address (default: {defaultServerHost})
+  --host <address[:port]> Bind address (default: {defaultServerHost}); optional port
   -p, --port <port> Bind port (default: {defaultServerPort})
   -D, --buildDrafts Include draft pages
   -h, --help        Show this help
