@@ -16,6 +16,7 @@ author: Jane Doe
 date: Mon, 19 Nov 2024 12:00:00 PST
 desc: A short description of this page.
 template: custom.html
+weight: 10
 draft: false
 type: feed
 ---
@@ -32,6 +33,7 @@ type: feed
 | `date` | Publication date in [RFC 2822](https://www.rfc-editor.org/rfc/rfc2822) format. Available as `{{ .Date }}` (formatted as `Month DD, YYYY`). |
 | `desc` | Short description. Injected as a `<meta name="description">` and `og:description` tag via `{{ .MetaTags }}`. Use the special value `no-index` to prevent the page from appearing in the sitemap. |
 | `template` | Name of the template file to use (e.g. `wide.html`). Defaults to `default.html`. |
+| `weight` | Integer that orders the page in `{{ range .Pages }}` menus, lowest first. Defaults to `0`. See [Navigation menus](/templates#navigation-menus). |
 | `draft` | Set to `true` to exclude the page from normal builds. Included when using `--buildDrafts`. |
 | `type` | Set to `feed` on a directory's `index.md` to enable the blog feed system. See [Feeds](/feeds). |
 

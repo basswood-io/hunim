@@ -35,6 +35,14 @@ var feedPostNav = initTable[string, tuple[
   prevTitle: string, prevRelPermalink: string,
   nextTitle: string, nextRelPermalink: string
 ]]()
+# Every listed Markdown page, in menu order, exposed to templates through
+# {{ range .Pages }}. Collected from src/ before any page renders, so each page
+# sees the whole site.
+type SitePage = object
+  title: string
+  relPermalink: string
+  weight: int
+var sitePages: seq[SitePage] = @[]
 var buildDrafts = false
 # When keepMarkdown is set (via the [markdown] table in hunim.toml), each page's
 # source Markdown is published alongside its HTML at the same route with a .md
@@ -411,11 +419,11 @@ proc loadComponents() =
   for name in names:
     resolve(name)
 
-proc renderWithBlock(content, blockName, title, relPermalink: string): string =
-  ## Render the small Hugo-style subset used for feed neighbor links:
-  ## {{ with .PrevInSection }}...{{ end }} and {{ with .NextInSection }}...{{ end }}.
-  let openTag = "{{ with ." & blockName & " }}"
-  let closeTag = "{{ end }}"
+proc expandBlocks(content, openTag: string,
+    render: proc (body: string): string): string =
+  ## Replace each `openTag`...{{ end }} block with render(body). A block with
+  ## no closing {{ end }} is left as-is.
+  const closeTag = "{{ end }}"
   var i = 0
   while true:
     let openIdx = content.find(openTag, i)
@@ -429,12 +437,26 @@ proc renderWithBlock(content, blockName, title, relPermalink: string): string =
     if closeIdx == -1:
       result &= content[openIdx .. ^1]
       break
-    if relPermalink != "":
-      var body = content[bodyStart ..< closeIdx]
-      body = body.replace("{{ .RelPermalink }}", relPermalink)
-      body = body.replace("{{ .Title }}", title)
-      result &= body
+    result &= render(content[bodyStart ..< closeIdx])
     i = closeIdx + closeTag.len
+
+proc renderWithBlock(content, blockName, title, relPermalink: string): string =
+  ## Render the small Hugo-style subset used for feed neighbor links:
+  ## {{ with .PrevInSection }}...{{ end }} and {{ with .NextInSection }}...{{ end }}.
+  expandBlocks(content, "{{ with ." & blockName & " }}",
+    proc (body: string): string =
+      if relPermalink != "":
+        result = body.replace("{{ .RelPermalink }}", relPermalink)
+        result = result.replace("{{ .Title }}", title))
+
+proc renderRangeBlock(content: string): string =
+  ## Render {{ range .Pages }}...{{ end }}: repeat the body once per entry in
+  ## sitePages, with {{ .RelPermalink }} and {{ .Title }} bound to that page.
+  expandBlocks(content, "{{ range .Pages }}",
+    proc (body: string): string =
+      for page in sitePages:
+        result &= body.replace("{{ .RelPermalink }}", page.relPermalink)
+            .replace("{{ .Title }}", page.title))
 
 proc renderWithBlocks(content: string, context: Table[string, string]): string =
   result = ""
@@ -442,7 +464,7 @@ proc renderWithBlocks(content: string, context: Table[string, string]): string =
     if seg.isCode:
       result &= seg.text
     else:
-      var text = seg.text
+      var text = renderRangeBlock(seg.text)
       text = renderWithBlock(text, "PrevInSection",
           context.getOrDefault("PrevInSection.Title", ""),
           context.getOrDefault("PrevInSection.RelPermalink", ""))
@@ -1118,6 +1140,52 @@ proc looseFrontmatter(file: string): Table[string, string] =
       result[lines[i][0 ..< colon].strip()] = lines[i][colon + 1 .. ^1].strip()
     inc i
 
+proc collectSitePages(): seq[SitePage] =
+  ## List the pages for {{ range .Pages }}: every Markdown page in src/ except
+  ## drafts, `desc: no-index` pages, and feed posts (a feed's index page lists
+  ## those via {{ .PostList }}). Sorted by `weight` frontmatter (default 0),
+  ## then by permalink. Frontmatter is read leniently so the dev server stays
+  ## up while a page is mid-edit.
+  proc walk(dir: string, isFeed: bool, pages: var seq[SitePage]) =
+    for kind, path in walkDir(dir):
+      let path = toUnixPath(path)
+      if kind == pcFile and path.endsWith(".md"):
+        let isIndex = path.extractFilename() == "index.md"
+        if isFeed and not isIndex:
+          continue
+        let frontmatter = looseFrontmatter(path)
+        if not buildDrafts and frontmatter.getOrDefault("draft", "false") == "true":
+          continue
+        if frontmatter.getOrDefault("desc", "") == "no-index":
+          continue
+
+        # "src/a/b.md" -> "/a/b"; "src/a/index.md" -> "/a"; "src/index.md" -> "/"
+        var rel = path[3 .. ^1].changeFileExt("")
+        if isIndex:
+          rel = rel[0 ..< rel.len - "/index".len]
+          if rel == "":
+            rel = "/"
+
+        var weight = 0
+        let rawWeight = frontmatter.getOrDefault("weight", "")
+        if rawWeight != "":
+          try:
+            weight = parseInt(rawWeight)
+          except ValueError:
+            warn &"Warning: {path}: weight must be an integer: \"{rawWeight}\""
+        pages.add(SitePage(title: titleOf(path, frontmatter),
+            relPermalink: rel, weight: weight))
+      elif kind == pcDir:
+        let indexFile = path / "index.md"
+        let isFeed2 = fileExists(indexFile) and
+            looseFrontmatter(indexFile).getOrDefault("type", "") == "feed"
+        walk(path, isFeed2, pages)
+
+  if dirExists("src"):
+    walk("src", false, result)
+  result.sort(proc (x, y: SitePage): int =
+    cmp((x.weight, x.relPermalink), (y.weight, y.relPermalink)))
+
 type
   TagRefs = tuple[comps, scripts: seq[string]]
   PageScan = object
@@ -1387,6 +1455,8 @@ proc main(doReload: bool) =
 
   # Optional [highlight] table. On unless explicitly disabled.
   highlightCode = table2{"highlight", "enabled"}.getBool(true)
+
+  sitePages = collectSitePages()
 
   var sitemapUrls: seq[string] = @[]
   feedRegistry.clear()
@@ -1752,7 +1822,10 @@ proc rebuildFeedDir(srcDir: string) =
   convertBatch(jobs)
 
 proc smartRebuild(added, removed, modified: seq[string]) =
-  if added.len > 0 or removed.len > 0 or "hunim.toml" in modified:
+  # A page's title, weight, or listing change alters every page that renders
+  # {{ range .Pages }}, so that takes the full-rebuild path too.
+  if added.len > 0 or removed.len > 0 or "hunim.toml" in modified or
+      collectSitePages() != sitePages:
     rebuild(doReload = true)
     return
 
