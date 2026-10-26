@@ -1,5 +1,6 @@
 ---
 title: Getting Started
+weight: 10
 desc: Learn how to install Hunim and create your first static site.
 ---
 

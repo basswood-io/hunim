@@ -1,5 +1,6 @@
 ---
 title: CLI Reference
+weight: 80
 desc: All Hunim commands and flags.
 ---
 

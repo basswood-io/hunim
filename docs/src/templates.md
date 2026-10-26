@@ -1,5 +1,6 @@
 ---
 title: Templates
+weight: 30
 desc: Build reusable HTML layouts for your Markdown pages.
 ---
 

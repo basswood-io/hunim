@@ -15,14 +15,8 @@
     </ul>
     <p class="nav-section">Documentation</p>
     <ul>
-      <li><a href="/getting-started">Getting Started</a></li>
-      <li><a href="/configuration">Configuration</a></li>
-      <li><a href="/templates">Templates</a></li>
-      <li><a href="/components">Components</a></li>
-      <li><a href="/syntax-highlighting">Syntax Highlighting</a></li>
-      <li><a href="/frontmatter">Frontmatter</a></li>
-      <li><a href="/feeds">Feeds</a></li>
-      <li><a href="/cli">CLI Reference</a></li>
+      {{ range .Pages }}<li><a href="{{ .RelPermalink }}">{{ .Title }}</a></li>
+      {{ end }}
     </ul>
   </nav>
 </aside>

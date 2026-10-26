@@ -1,5 +1,6 @@
 ---
 title: Feeds
+weight: 70
 desc: Set up a blog with automatic RSS feed generation.
 ---
 

@@ -1,5 +1,6 @@
 ---
 title: Frontmatter
+weight: 60
 desc: Add metadata to Markdown pages using YAML-style frontmatter.
 ---
 

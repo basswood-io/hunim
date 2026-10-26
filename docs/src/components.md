@@ -1,5 +1,6 @@
 ---
 title: Components
+weight: 40
 desc: Create reusable HTML snippets and embed them in templates and pages.
 ---
 

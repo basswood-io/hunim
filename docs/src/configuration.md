@@ -1,5 +1,6 @@
 ---
 title: Configuration
+weight: 20
 desc: Configure your Hunim site with hunim.toml.
 ---
 

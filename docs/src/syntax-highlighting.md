@@ -1,5 +1,6 @@
 ---
 title: Syntax Highlighting
+weight: 50
 desc: Hunim colors fenced code blocks at build time — no client JavaScript, no flash of unstyled content.
 ---
 
