@@ -61,6 +61,14 @@ desc: no-index
 ---
 ```
 
+Pages written directly as HTML have no frontmatter. To keep one out of the sitemap, put the tag in its `<head>` yourself:
+
+```html
+<meta name="robots" content="noindex">
+```
+
+The root `404.html` is never listed.
+
 ## Omitting frontmatter
 
 Frontmatter is optional. A Markdown file without frontmatter is still processed: `{{ .Content }}` holds the rendered Markdown. When there is no `title`, the title is derived from the filename — hyphens become spaces and, by default, each word is capitalized, so `my-cool-post.md` becomes `My Cool Post`. Set `titleCase` in `hunim.toml` to `uppercase` for `MY COOL POST` or `lowercase` for `my cool post`. This title is used for both `{{ .Title }}` and the `og:title` meta tag. A `desc` is still required to emit a description / `og:description` tag.

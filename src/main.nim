@@ -554,7 +554,30 @@ proc expandExecInMarkdown(content: string): string =
   for seg in mdCodeSegments(content):
     result &= (if seg.isCode: seg.text else: processExecTagsSegment(seg.text))
 
-proc processFile(path: string, baseUrl: string, doReload: bool, lang: string): string =
+proc hasNoindexMeta(content: string): bool =
+  ## Whether the page carries a `<meta name="robots">` tag whose content
+  ## includes `noindex` (e.g. "noindex" or "noindex, nofollow"). Tolerant of
+  ## case, quote style and attribute order.
+  let lower = content.toLowerAscii()
+  var pos = 0
+  while true:
+    let start = lower.find("<meta", pos)
+    if start == -1:
+      return false
+    var stop = lower.find('>', start)
+    if stop == -1:
+      stop = lower.high
+    let tag = lower[start .. stop].multiReplace(("'", "\""), (" =", "="), ("= ", "="))
+    if (tag.contains("name=\"robots\"") or tag.contains("name=robots")) and
+        tag.contains("noindex"):
+      return true
+    pos = stop + 1
+
+proc processFile(path: string, baseUrl: string, doReload: bool, lang: string,
+    markdownPages: HashSet[string] = initHashSet[string]()): string =
+  ## Finalize one HTML file in public/ and return its sitemap URL, or "" when it
+  ## should not be listed. `markdownPages` holds the public/*.html paths that
+  ## were rendered from Markdown.
   # Skip non-HTML files
   let ext = path.splitFile().ext.toLowerAscii()
   if ext != ".html":
@@ -582,12 +605,8 @@ proc processFile(path: string, baseUrl: string, doReload: bool, lang: string): s
     content = content.replace("</head>", reloadScript & "\n</head>")
 
   var outputPath = path
-  var wasRenamed = false
-  if path.endsWith("index.html"):
-    outputPath = path
-  elif path.endsWith(".html"):
+  if not path.endsWith("index.html"):
     outputPath = path.splitFile().dir / path.splitFile().name
-    wasRenamed = true
 
   writeFile(outputPath, content)
 
@@ -597,14 +616,16 @@ proc processFile(path: string, baseUrl: string, doReload: bool, lang: string): s
   # else:
   #   echo "Processed: ", path
 
-  # Only add to sitemap if this is an index.html file
-  # Non-index HTML files that get renamed were generated from markdown
-  # and already added to sitemap during conversion
-  if wasRenamed:
+  # Pages rendered from Markdown were already added to the sitemap (or kept out
+  # of it) during conversion.
+  if path in markdownPages:
     return ""
 
-  # Check if page has noindex meta tag
-  if content.contains("<meta name=\"robots\" content=\"noindex\">"):
+  # The not-found page is never a real destination.
+  if path == "public/404.html":
+    return ""
+
+  if hasNoindexMeta(content):
     return ""
 
   # Generate URL for sitemap
@@ -613,20 +634,19 @@ proc processFile(path: string, baseUrl: string, doReload: bool, lang: string): s
     url = url.replace("/index.html", "")
   elif url == "index.html":
     url = ""
-  elif url.endsWith(".html"):
-    url = url[0..^6] # Remove .html extension
 
   return baseUrl & url
 
-proc processDirectory(dir: string, baseUrl: string, urls: var seq[string], doReload: bool, lang: string) =
+proc processDirectory(dir: string, baseUrl: string, urls: var seq[string],
+    doReload: bool, lang: string, markdownPages: HashSet[string]) =
   for kind, path in walkDir(dir):
     let path = toUnixPath(path)
     if kind == pcFile:
-      let url = processFile(path, baseUrl, doReload, lang)
+      let url = processFile(path, baseUrl, doReload, lang, markdownPages)
       if url != "":
         urls.add(url)
     elif kind == pcDir:
-      processDirectory(path, baseUrl, urls, doReload, lang)
+      processDirectory(path, baseUrl, urls, doReload, lang, markdownPages)
 
 type BlogPost = object
   title: string
@@ -1530,7 +1550,9 @@ proc main(doReload: bool) =
         sitemapUrls.add(results[i].sitemapUrl)
 
 
-  processDirectory("public", baseUrl, sitemapUrls, doReload, lang) # Handle components
+  # Handle components, and list the pages written directly as HTML.
+  let markdownPages = jobs.mapIt(it.path).toHashSet()
+  processDirectory("public", baseUrl, sitemapUrls, doReload, lang, markdownPages)
   writeSitemap(sitemapUrls, "public/sitemap.xml") # Generate sitemap
   echo "done building"
 

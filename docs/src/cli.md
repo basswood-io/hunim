@@ -101,7 +101,7 @@ All commands write to the `public/` directory:
 | File | Description |
 |------|-------------|
 | `public/**/*.html` | Converted Markdown and copied HTML files |
-| `public/sitemap.xml` | Sitemap with all indexed pages |
+| `public/sitemap.xml` | Sitemap with every Markdown and HTML page, except [`no-index`](/frontmatter) pages |
 | `public/{feed}/index.xml` | RSS feed for each feed directory |
 
 ## URL structure
