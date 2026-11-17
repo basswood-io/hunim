@@ -19,8 +19,6 @@ jobs:
             binary_name: macos-arm64
           - os: windows-latest
             binary_name: windows-x86_64
-          - os: windows-11-arm
-            binary_name: windows-aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -46,5 +44,31 @@ jobs:
         uses: softprops/action-gh-release@v3
         with:
           files: hunim-${{ matrix.binary_name }}*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  windows-arm:
+    # No native ARM64 Nim for Windows, so cross-compile with llvm-mingw.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+      - name: Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "stable"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install llvm-mingw
+        run: |
+          curl -fsSL -o llvm-mingw.tar.xz https://github.com/mstorsjo/llvm-mingw/releases/download/20260616/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64.tar.xz
+          tar xf llvm-mingw.tar.xz
+          echo "$PWD/llvm-mingw-20260616-ucrt-ubuntu-22.04-x86_64/bin" >> $GITHUB_PATH
+      - name: Compile
+        run: nimble makewinarm && mv hunim.exe hunim-windows-aarch64.exe
+      - name: Upload to Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v3
+        with:
+          files: hunim-windows-aarch64.exe
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

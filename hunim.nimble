@@ -31,6 +31,19 @@ task make, "Export the project":
   when defined(linux):
     exec "strip -s hunim"
 
+task makewinarm, "Cross-compile to Windows ARM64 (requires llvm-mingw)":
+  if not dirExists("lib"):
+    mkDir("lib")
+  if not dirExists("lib/md4c"):
+    exec "git clone https://github.com/mity/md4c lib/md4c"
+
+  exec "nim c -d:danger --opt:size --panics:on --passC:-flto --passL:-flto --passL:-static --passC:-Ilib/md4c/src " &
+       "--os:windows --cpu:arm64 --cc:clang " &
+       "--clang.exe:aarch64-w64-mingw32-clang " &
+       "--clang.linkerexe:aarch64-w64-mingw32-clang " &
+       "--out:hunim.exe src/main.nim"
+  exec "llvm-strip -s hunim.exe"
+
 task bin, "Put binary in ~/bin/":
   exec "cp hunim ~/bin/"
   echo "Put hunim in ~/bin/"
