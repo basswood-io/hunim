@@ -19,7 +19,7 @@ jobs:
             binary_name: macos-arm64
           - os: windows-latest
             binary_name: windows-x86_64
-          - os: windows-arm
+          - os: windows-11-arm
             binary_name: windows-aarch64
     steps:
       - name: Checkout
