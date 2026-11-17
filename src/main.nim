@@ -1066,7 +1066,9 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
   var sitemapUrl = ""
   if desc != "no-index":
     var url = job.path.replace("public/", "")
-    if url.endswith("/index.html"):
+    if url == "index.html":
+      url = "" # the site root: public/index.html -> baseUrl
+    elif url.endswith("/index.html"):
       url = url.replace("/index.html", "")
     else:
       url = url.replace(".html", "")
