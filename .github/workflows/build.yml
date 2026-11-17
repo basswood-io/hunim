@@ -12,12 +12,15 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            arch: x86_64
             binary_name: linux-x86_64
+          - os: ubuntu-26.04-arm
+            binary_name: linux-aarch64
           - os: macos-latest
             binary_name: macos-arm64
           - os: windows-latest
             binary_name: windows-x86_64
+          - os: windows-arm
+            binary_name: windows-aarch64
     steps:
       - name: Checkout
         uses: actions/checkout@v7
