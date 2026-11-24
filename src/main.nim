@@ -136,7 +136,7 @@ proc parseDate(date: string): DateTime =
     result = parse(date2, "ddd, dd MMM yyyy HH:mm:ss")
   except TimeParseError:
     error &"Invalid date (expected 'ddd, dd MMM yyyy HH:mm:ss ZZZ'): \"{date}\""
-  case timezone:
+  case timezone
     of "EDT": result -= initDuration(hours = -4)
     of "EST": result -= initDuration(hours = -5)
     of "CDT": result -= initDuration(hours = -5)
@@ -358,30 +358,29 @@ proc parseTemplateSegment(content: string, compName: string,
     let nameEnd = openIdx + compName.len + 3
     if nameEnd >= newContent.len or newContent[nameEnd] != ' ':
       startIdx = openIdx + 1
-      continue
-    let closeIdx = newContent.find(" }}", openIdx)
-    if closeIdx == -1 and openIdx != -1:
-      stderr.writeLine("error! Unclosed template for " & compName)
-      quit(1)
-    if closeIdx == -1:
-      break
+    else:
+      let closeIdx = newContent.find(" }}", openIdx)
+      if closeIdx == -1:
+        stderr.writeLine("error! Unclosed template for " & compName)
+        quit(1)
 
-    # In Markdown pages, components are parsed after Markdown conversion, which
-    # escapes the argument quotes to `&quot;`. Normalize that back to `"` so the
-    # delimiter split works the same as in raw HTML pages and templates.
-    let argsStr = newContent[openIdx + compName.len + 3 .. closeIdx - 1]
-        .strip().replace("&quot;", "\"")
-    let args = argsStr.split('"').filterIt(it.strip() != "")
+      # In Markdown pages, components are parsed after Markdown conversion,
+      # which escapes the argument quotes to `&quot;`. Normalize that back to
+      # `"` so the delimiter split works the same as in raw HTML pages and
+      # templates.
+      let argsStr = newContent[nameEnd .. closeIdx - 1]
+          .strip().replace("&quot;", "\"")
+      let args = argsStr.split('"').filterIt(it.strip() != "")
 
-    var replacedContent = compContent
-    for i, arg in args:
-      replacedContent = replacedContent.replace("{{ $" & $(i+1) & " }}", arg)
+      var replacedContent = compContent
+      for i, arg in args:
+        replacedContent = replacedContent.replace("{{ $" & $(i+1) & " }}", arg)
 
-    # Replace only this matched span; replacing all occurrences of the match
-    # text would desync startIdx and mishandle repeated invocations.
-    newContent = newContent[0 ..< openIdx] & replacedContent &
-        newContent[closeIdx + 3 .. ^1]
-    startIdx = openIdx + replacedContent.len
+      # Replace only this matched span; replacing all occurrences of the match
+      # text would desync startIdx and mishandle repeated invocations.
+      newContent = newContent[0 ..< openIdx] & replacedContent &
+          newContent[closeIdx + 3 .. ^1]
+      startIdx = openIdx + replacedContent.len
 
   return newContent
 
@@ -460,7 +459,8 @@ proc renderWithBlock(content, blockName, title, relPermalink: string): string =
     proc (body: string): string =
       if relPermalink != "":
         result = body.replace("{{ .RelPermalink }}", relPermalink)
-        result = result.replace("{{ .Title }}", title))
+        result = result.replace("{{ .Title }}", title)
+  )
 
 proc renderRangeBlock(content: string): string =
   ## Render {{ range .Pages }}...{{ end }}: repeat the body once per entry in
@@ -768,18 +768,13 @@ proc collectPosts(baseUrl, inputPath: string): seq[BlogPost] =
   ## Collect all blog posts in a feed directory, sorted newest first.
   for file in walkFiles(inputPath / "*.md"):
     let file = toUnixPath(file)
-    if file.endsWith("index.md"):
-      continue
-
-    let frontmatter = parseFrontmatter(file)
-    if not buildDrafts and frontmatter.getOrDefault("draft", "false") == "true":
-      continue
-
-    let post = extractMetadata(baseUrl, file, frontmatter)
-    # Posts opting out of indexing are excluded from the feed and post list.
-    if post.desc == "no-index":
-      continue
-    result.add(post)
+    if not file.endsWith("index.md"):
+      let frontmatter = parseFrontmatter(file)
+      if buildDrafts or frontmatter.getOrDefault("draft", "false") != "true":
+        let post = extractMetadata(baseUrl, file, frontmatter)
+        # Posts opting out of indexing are excluded from the feed and post list.
+        if post.desc != "no-index":
+          result.add(post)
 
   # Sort posts by date (newest first)
   result.sort(proc (x, y: BlogPost): int =
@@ -1081,7 +1076,7 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
     htmlContent = htmlContent.replace("{{ .PostList }}", postList)
 
   # Prepare content for rendering
-  var content = htmlContent
+  let content = htmlContent
 
   # Prepare meta tags. Values are XML-escaped so titles/descriptions containing
   # ", &, < or > don't truncate the attribute or inject stray markup.
@@ -1098,7 +1093,7 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
     var url = job.path.replace("public/", "")
     if url == "index.html":
       url = "" # the site root: public/index.html -> baseUrl
-    elif url.endswith("/index.html"):
+    elif url.endsWith("/index.html"):
       url = url.replace("/index.html", "")
     else:
       url = url.replace(".html", "")
@@ -1204,30 +1199,30 @@ proc collectSitePages(): seq[SitePage] =
       let path = toUnixPath(path)
       if kind == pcFile and path.endsWith(".md"):
         let isIndex = path.extractFilename() == "index.md"
-        if isFeed and not isIndex:
-          continue
-        let frontmatter = looseFrontmatter(path)
-        if not buildDrafts and frontmatter.getOrDefault("draft", "false") == "true":
-          continue
-        if frontmatter.getOrDefault("desc", "") == "no-index":
-          continue
+        # Feed posts are listed by their feed's index page, not individually.
+        if not isFeed or isIndex:
+          let frontmatter = looseFrontmatter(path)
+          let isDraft = frontmatter.getOrDefault("draft", "false") == "true"
+          if (buildDrafts or not isDraft) and
+              frontmatter.getOrDefault("desc", "") != "no-index":
+            # "src/a/b.md" -> "/a/b"; "src/a/index.md" -> "/a";
+            # "src/index.md" -> "/"
+            var rel = path[3 .. ^1].changeFileExt("")
+            if isIndex:
+              rel = rel[0 ..< rel.len - "/index".len]
+              if rel == "":
+                rel = "/"
 
-        # "src/a/b.md" -> "/a/b"; "src/a/index.md" -> "/a"; "src/index.md" -> "/"
-        var rel = path[3 .. ^1].changeFileExt("")
-        if isIndex:
-          rel = rel[0 ..< rel.len - "/index".len]
-          if rel == "":
-            rel = "/"
-
-        var weight = 0
-        let rawWeight = frontmatter.getOrDefault("weight", "")
-        if rawWeight != "":
-          try:
-            weight = parseInt(rawWeight)
-          except ValueError:
-            warn &"Warning: {path}: weight must be an integer: \"{rawWeight}\""
-        pages.add(SitePage(title: titleOf(path, frontmatter),
-            relPermalink: rel, weight: weight))
+            var weight = 0
+            let rawWeight = frontmatter.getOrDefault("weight", "")
+            if rawWeight != "":
+              try:
+                weight = parseInt(rawWeight)
+              except ValueError:
+                warn &"Warning: {path}: weight must be an integer: " &
+                    &"\"{rawWeight}\""
+            pages.add(SitePage(title: titleOf(path, frontmatter),
+                relPermalink: rel, weight: weight))
       elif kind == pcDir:
         let indexFile = path / "index.md"
         let isFeed2 = fileExists(indexFile) and
@@ -1266,8 +1261,8 @@ proc scanSite(): SiteScan =
       let path = toUnixPath(path)
       let fname = path.extractFilename()
       if kind != pcFile or fname.startsWith("."):
-        continue
-      if fname.endsWith(".nims"):
+        discard
+      elif fname.endsWith(".nims"):
         s.scriptNames.add(fname)
       else:
         let name = fname.changeFileExt("")
@@ -1295,21 +1290,21 @@ proc scanSite(): SiteScan =
       let path = toUnixPath(path)
       if kind == pcFile:
         let ext = path.splitFile().ext.toLowerAscii()
-        if ext notin [".md", ".html"]:
-          continue
-        var page = PageScan(path: path)
-        let isMd = ext == ".md"
-        page.refs = scanTagRefs(nonCodeText(readFile(path), isMd), s.compNames)
-        if isMd:
-          if isFeed:
-            page.feedDir = dir
-          page.templateFile =
-            looseFrontmatter(path).getOrDefault("template", "default.html")
-          if isFeed and not path.endsWith("index.md"):
-            let implicit = dir.split('/')[^1] & "_list.html"
-            if implicit in s.templateNames:
-              page.templateFile = implicit
-        s.pages.add(page)
+        if ext in [".md", ".html"]:
+          var page = PageScan(path: path)
+          let isMd = ext == ".md"
+          page.refs = scanTagRefs(nonCodeText(readFile(path), isMd),
+              s.compNames)
+          if isMd:
+            if isFeed:
+              page.feedDir = dir
+            page.templateFile =
+              looseFrontmatter(path).getOrDefault("template", "default.html")
+            if isFeed and not path.endsWith("index.md"):
+              let implicit = dir.split('/')[^1] & "_list.html"
+              if implicit in s.templateNames:
+                page.templateFile = implicit
+          s.pages.add(page)
       elif kind == pcDir:
         let indexFile = path / "index.md"
         var isFeed2 = false
@@ -1354,13 +1349,12 @@ proc buildNodesFor(scan: SiteScan, jobs: seq[ConvertJob]): BuildNodes =
   var pageCount = jobs.len
   for job in jobs:
     let srcPath = srcPathForJob(job)
-    if srcPath notin pages:
-      continue
-    let page = pages[srcPath]
-    markRefs(page.refs)
-    if page.templateFile in scan.tmplRefs:
-      usedTmpls.incl(page.templateFile)
-      markRefs(scan.tmplRefs[page.templateFile])
+    if srcPath in pages:
+      let page = pages[srcPath]
+      markRefs(page.refs)
+      if page.templateFile in scan.tmplRefs:
+        usedTmpls.incl(page.templateFile)
+        markRefs(scan.tmplRefs[page.templateFile])
 
   for page in scan.pages:
     if page.path.splitFile().ext.toLowerAscii() == ".html":
@@ -1489,27 +1483,27 @@ proc main(doReload: bool) =
   let siteScan = scanSite()
   warnUnused(siteScan)
 
-  let table2 = parsetoml.parseFile("hunim.toml")
+  let config = parsetoml.parseFile("hunim.toml")
 
-  siteBaseUrl = $table2["baseURL"]
+  siteBaseUrl = $config["baseURL"]
   if not siteBaseUrl.endsWith("/"):
     error "baseURL must end with /"
-  siteLang = $table2["languageCode"]
+  siteLang = $config["languageCode"]
   let baseUrl = siteBaseUrl
   let lang = siteLang
 
-  generatedTitleCase = table2.getOrDefault("titleCase").getStr(
+  generatedTitleCase = config.getOrDefault("titleCase").getStr(
       "titlecase").toLowerAscii()
   if generatedTitleCase notin ["titlecase", "uppercase", "lowercase"]:
     error "titleCase must be one of: titlecase, uppercase, lowercase"
 
   # Optional [markdown] table. Absent keys fall back to the defaults above.
-  keepMarkdown = table2{"markdown", "keepSource"}.getBool(false)
-  mdStripFrontmatter = table2{"markdown", "stripFrontmatter"}.getBool(true)
-  mdExpandTags = table2{"markdown", "expandTags"}.getBool(true)
+  keepMarkdown = config{"markdown", "keepSource"}.getBool(false)
+  mdStripFrontmatter = config{"markdown", "stripFrontmatter"}.getBool(true)
+  mdExpandTags = config{"markdown", "expandTags"}.getBool(true)
 
   # Optional [highlight] table. On unless explicitly disabled.
-  highlightCode = table2{"highlight", "enabled"}.getBool(true)
+  highlightCode = config{"highlight", "enabled"}.getBool(true)
 
   sitePages = collectSitePages()
 
@@ -1524,22 +1518,19 @@ proc main(doReload: bool) =
     for kind, path in walkDir(dir):
       let path = toUnixPath(path)
       if kind == pcFile and path.endsWith(".md"):
-        # Check if the file is a draft and should be skipped
-        if not buildDrafts:
-          let frontmatter = parseFrontmatter(path)
-          if frontmatter.getOrDefault("draft", "false") == "true":
-            continue
-
-        let feedDir = (if isFeed and not path.endsWith(
-            "index.md"): dir else: "")
-        jobs.add(ConvertJob(
-          doReload: doReload,
-          baseUrl: baseUrl,
-          lang: lang,
-          file: path,
-          path: path.changeFileExt("html"),
-          feedDir: feedDir
-        ))
+        # Skip drafts unless they were asked for.
+        if buildDrafts or
+            parseFrontmatter(path).getOrDefault("draft", "false") != "true":
+          let feedDir = (if isFeed and not path.endsWith(
+              "index.md"): dir else: "")
+          jobs.add(ConvertJob(
+            doReload: doReload,
+            baseUrl: baseUrl,
+            lang: lang,
+            file: path,
+            path: path.changeFileExt("html"),
+            feedDir: feedDir
+          ))
       elif kind == pcDir:
         let indexFile = path / "index.md"
         var isFeed2 = false
@@ -1836,11 +1827,12 @@ proc rebuildSrcPages(srcPaths: seq[string]) =
       if not buildDrafts and
           looseFrontmatter(pubPath).getOrDefault("draft", "false") == "true":
         removeStaleOutputs(pubPath)
-        continue
-      var job = ConvertJob(doReload: true, baseUrl: siteBaseUrl, lang: siteLang,
-          file: pubPath, path: pubPath.changeFileExt("html"), feedDir: "")
-      job.body = expandExecInMarkdown(nonFrontmatter(pubPath))
-      jobs.add(job)
+      else:
+        var job = ConvertJob(doReload: true, baseUrl: siteBaseUrl,
+            lang: siteLang, file: pubPath, path: pubPath.changeFileExt("html"),
+            feedDir: "")
+        job.body = expandExecInMarkdown(nonFrontmatter(pubPath))
+        jobs.add(job)
     else:
       discard processFile(pubPath, siteBaseUrl, true, siteLang)
   convertBatch(jobs)
@@ -1870,12 +1862,12 @@ proc rebuildFeedDir(srcDir: string) =
     if not buildDrafts and
         looseFrontmatter(f).getOrDefault("draft", "false") == "true":
       removeStaleOutputs(f)
-      continue
-    var job = ConvertJob(doReload: true, baseUrl: siteBaseUrl, lang: siteLang,
-        file: f, path: f.changeFileExt("html"),
-        feedDir: (if f.endsWith("index.md"): "" else: pubDir))
-    job.body = expandExecInMarkdown(nonFrontmatter(f))
-    jobs.add(job)
+    else:
+      var job = ConvertJob(doReload: true, baseUrl: siteBaseUrl, lang: siteLang,
+          file: f, path: f.changeFileExt("html"),
+          feedDir: (if f.endsWith("index.md"): "" else: pubDir))
+      job.body = expandExecInMarkdown(nonFrontmatter(f))
+      jobs.add(job)
   convertBatch(jobs)
 
 proc smartRebuild(added, removed, modified: seq[string]) =
@@ -1993,19 +1985,18 @@ proc server() =
     while true:
       await sleepAsync(100) # 0.1sec
       let current = snapshotInputs()
-      if current == snapshot:
-        continue
-      var added, removed, modified: seq[string]
-      for path, mtime in current:
-        if path notin snapshot:
-          added.add(path)
-        elif snapshot[path] != mtime:
-          modified.add(path)
-      for path in snapshot.keys:
-        if path notin current:
-          removed.add(path)
-      snapshot = current
-      smartRebuild(added, removed, modified)
+      if current != snapshot:
+        var added, removed, modified: seq[string]
+        for path, mtime in current:
+          if path notin snapshot:
+            added.add(path)
+          elif snapshot[path] != mtime:
+            modified.add(path)
+        for path in snapshot.keys:
+          if path notin current:
+            removed.add(path)
+        snapshot = current
+        smartRebuild(added, removed, modified)
 
   stdout.styledWriteLine(fgGreen, &"Server running at http://{address}:{port}/")
   stdout.styledWriteLine(fgYellow, "Press Ctrl+C to stop")
@@ -2017,29 +2008,29 @@ proc server() =
 
 when isMainModule:
   var cmd = ""
-  var cmd2 = ""
+  var arg = ""
 
   for i in 1..paramCount():
     if paramStr(i) == "--buildDrafts" or paramStr(i) == "-D":
       buildDrafts = true
     elif not paramStr(i).startsWith("-") and cmd == "":
       cmd = paramStr(i)
-    elif cmd2 == "":
-      cmd2 = paramStr(i)
+    elif arg == "":
+      arg = paramStr(i)
 
   if cmd == "" or cmd == "build":
     try:
-      main(doReload=false)
+      main(doReload = false)
     except CatchableError as e:
       error "Build failed: " & e.msg
   elif cmd == "version":
     echo version
   elif cmd == "newsite":
-    if cmd2 == "":
+    if arg == "":
       error "You must provide a site name"
-    newSite(cmd2)
+    newSite(arg)
   elif cmd == "server":
-    rebuild(doReload=true)
+    rebuild(doReload = true)
     server()
   elif cmd == "dag":
     dagServer()
