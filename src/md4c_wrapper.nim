@@ -21,21 +21,32 @@ const
 
 {.emit: """
 #include "../lib/md4c/src/md4c-html.h"
+#include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 typedef struct {
   char* data;
-  int len;
-  int cap;
+  size_t len;
+  size_t cap;
+  int failed; /* set on allocation failure; the output is then incomplete */
 } CStringBuilder;
 
 static void output_callback(const char* text, unsigned int size, void* userdata) {
   CStringBuilder* builder = (CStringBuilder*)userdata;
-  if (builder->len + size > builder->cap) {
-    int new_cap = (builder->len + size) * 2;
+  if (builder->failed) {
+    return;
+  }
+  if (size > builder->cap - builder->len) {
+    if (builder->len > (SIZE_MAX - size) / 2) {
+      builder->failed = 1;
+      return;
+    }
+    size_t new_cap = (builder->len + size) * 2;
     char* grown = realloc(builder->data, new_cap);
     if (grown == NULL) {
-      return; /* out of memory: drop this chunk rather than leak/segfault */
+      builder->failed = 1;
+      return;
     }
     builder->data = grown;
     builder->cap = new_cap;
@@ -44,41 +55,48 @@ static void output_callback(const char* text, unsigned int size, void* userdata)
   builder->len += size;
 }
 
-int nim_md_html_wrapper(const char* input, unsigned int input_size, unsigned int flags, char** output, int* output_size) {
+/* Returns 0 on success. On failure, *output may still hold a buffer that the
+   caller must free. */
+int nim_md_html_wrapper(const char* input, unsigned int input_size, unsigned int flags, char** output, size_t* output_size) {
   CStringBuilder builder;
-  builder.cap = input_size * 2 + 1;
-  builder.data = malloc(builder.cap);
+  builder.cap = (size_t)input_size * 2 + 1;
   builder.len = 0;
+  builder.failed = 0;
+  builder.data = malloc(builder.cap);
 
-  int ret = md_html(input, input_size, output_callback, &builder, flags, 0);
+  int ret = -1;
+  if (builder.data != NULL) {
+    ret = md_html(input, input_size, output_callback, &builder, flags, 0);
+    if (builder.failed) {
+      ret = -1;
+    }
+  }
 
   *output = builder.data;
   *output_size = builder.len;
-
   return ret;
 }
 """.}
 
-proc nim_md_html_wrapper(input: cstring, input_size: cuint, flags: cuint, output: ptr cstring, output_size: ptr cint): cint {.importc, nodecl.}
+proc nimMdHtmlWrapper(input: cstring, inputSize: cuint, flags: cuint,
+    output: ptr cstring, outputSize: ptr csize_t): cint {.
+    importc: "nim_md_html_wrapper", nodecl.}
 proc free(p: pointer) {.importc, header: "<stdlib.h>".}
 
 proc markdown*(input: string): string {.gcsafe.} =
   ## Convert markdown to HTML using md4c
+  if input.len.uint64 > high(uint32).uint64:
+    raise newException(ValueError, "Markdown input too large")
+
   var output: cstring
-  var output_size: cint
-
-  let ret = nim_md_html_wrapper(
-    input.cstring,
-    input.len.cuint,
-    MD_DIALECT_GITHUB,
-    addr output,
-    addr output_size
-  )
-
-  if ret != 0:
-    raise newException(ValueError, "Markdown parsing failed")
-
-  result = newString(output_size)
-  if output_size > 0:
-    copyMem(addr result[0], output, output_size)
-  free(output)
+  var outputSize: csize_t
+  let ret = nimMdHtmlWrapper(input.cstring, input.len.cuint, MD_DIALECT_GITHUB,
+      addr output, addr outputSize)
+  try:
+    if ret != 0:
+      raise newException(ValueError, "Markdown parsing failed")
+    result = newString(outputSize.int)
+    if outputSize > 0:
+      copyMem(addr result[0], output, outputSize.int)
+  finally:
+    free(output)

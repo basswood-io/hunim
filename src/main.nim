@@ -90,6 +90,10 @@ proc error(msg: string) =
   stderr.styledWriteLine(fgRed, bgBlack, msg, resetStyle)
   quit(1)
 
+type BuildError = object of CatchableError
+  ## A build failure raised (instead of quitting via `error`) from code that can
+  ## run on worker threads, so the caller can report it cleanly.
+
 proc warn(msg: string) =
   stderr.styledWriteLine(fgYellow, msg, resetStyle)
 
@@ -128,7 +132,10 @@ proc parseDate(date: string): DateTime =
   let date2 = explode[0]
   let timezone = explode[1]
 
-  result = parse(date2, "ddd, dd MMM yyyy HH:mm:ss")
+  try:
+    result = parse(date2, "ddd, dd MMM yyyy HH:mm:ss")
+  except TimeParseError:
+    error &"Invalid date (expected 'ddd, dd MMM yyyy HH:mm:ss ZZZ'): \"{date}\""
   case timezone:
     of "EDT": result -= initDuration(hours = -4)
     of "EST": result -= initDuration(hours = -5)
@@ -346,6 +353,12 @@ proc parseTemplateSegment(content: string, compName: string,
     let openIdx = newContent.find("{{ " & compName, startIdx)
     if openIdx == -1:
       break
+    # Require a space after the name (as findComponentRefs does) so component
+    # `nav` doesn't swallow `{{ navbar }}`.
+    let nameEnd = openIdx + compName.len + 3
+    if nameEnd >= newContent.len or newContent[nameEnd] != ' ':
+      startIdx = openIdx + 1
+      continue
     let closeIdx = newContent.find(" }}", openIdx)
     if closeIdx == -1 and openIdx != -1:
       stderr.writeLine("error! Unclosed template for " & compName)
@@ -497,13 +510,15 @@ proc validateExecScriptName(scriptName: string) =
 proc runNimScript(scriptName: string): string =
   validateExecScriptName(scriptName)
   let scriptPath = "components" / scriptName
+  # Raise rather than quit: this runs on worker threads, whose callers collect
+  # and report the failure.
   if not fileExists(scriptPath):
-    error &"NimScript not found: {scriptPath}"
+    raise newException(BuildError, &"NimScript not found: {scriptPath}")
 
   let (output, exitCode) = execCmdEx(
       "nim e --hints:off " & quoteShell(scriptPath))
   if exitCode != 0:
-    error &"NimScript failed ({scriptName}):\n{output}"
+    raise newException(BuildError, &"NimScript failed ({scriptName}):\n{output}")
   return output.strip()
 
 proc execScriptOutput(scriptName: string): string =
@@ -731,13 +746,16 @@ proc formatDisplayDate(date: string): string =
     let parsedDate = parse(date, "ddd, dd MMM yyyy HH:mm:ss zzz")
     format(parsedDate, "MMMM d, yyyy")
   except CatchableError:
-    # Fall back to just the date part, e.g. "29 Jul 2024"
+    # Fall back to just the date part, e.g. "29 Jul 2024". This runs on page
+    # workers, so raise instead of quitting.
     let parts = date.split(" ")
+    let msg = &"Invalid date (expected 'ddd, dd MMM yyyy ...'): \"{date}\""
     if parts.len < 4:
-      error &"Invalid date (expected 'ddd, dd MMM yyyy ...'): \"{date}\""
-    let datePart = parts[1..3].join(" ")
-    let parsedDate = parse(datePart, "dd MMM yyyy")
-    format(parsedDate, "MMMM d, yyyy")
+      raise newException(BuildError, msg)
+    try:
+      format(parse(parts[1..3].join(" "), "dd MMM yyyy"), "MMMM d, yyyy")
+    except TimeParseError:
+      raise newException(BuildError, msg)
 
 proc renderInline(text: string): string =
   ## Render inline markdown (e.g. backticks in a title) and strip the wrapping
@@ -893,6 +911,7 @@ type PageResult = object
   html: string
   sitemapUrl: string
   keepMarkdown: bool
+  error: string  # Set instead of the fields above if rendering raised
 
 type ConvertCtx = object
   jobs: ptr seq[ConvertJob]
@@ -953,10 +972,13 @@ proc convertMarkdownWorker(ctx: ConvertCtx) {.thread.} =
       break
     # highlightCode is a plain bool set before the pool spawns, so this read
     # stays gcsafe.
-    let html = markdown(ctx.jobs[][i].body)
-    {.cast(gcsafe).}:
-      ctx.results[][i] = renderConvertedMarkdown(ctx.jobs[][i],
-          if highlightCode: highlightCodeBlocks(html) else: html)
+    try:
+      let html = markdown(ctx.jobs[][i].body)
+      {.cast(gcsafe).}:
+        ctx.results[][i] = renderConvertedMarkdown(ctx.jobs[][i],
+            if highlightCode: highlightCodeBlocks(html) else: html)
+    except CatchableError as e:
+      ctx.results[][i].error = ctx.jobs[][i].file & ": " & e.msg
 
 proc renderMarkdownPages(jobs: var seq[ConvertJob]): seq[PageResult] =
   ## Render Markdown jobs across a bounded worker pool. The atomic cursor keeps
@@ -974,6 +996,14 @@ proc renderMarkdownPages(jobs: var seq[ConvertJob]): seq[PageResult] =
     createThread(threads[i], convertMarkdownWorker, ctx)
   for i in 0 ..< nThreads:
     joinThread(threads[i])
+
+  # Report every failed page at once, before anything is committed.
+  var errors: seq[string]
+  for r in result:
+    if r.error != "":
+      errors.add(r.error)
+  if errors.len > 0:
+    raise newException(BuildError, errors.join("\n"))
 
 proc expandMarkdown(content: string, context: Table[string, string]): string =
   ## Expand component, {{ .Var }}, and {{ exec }} tags in raw Markdown, leaving
@@ -1098,7 +1128,8 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
   if useTemplate:
     # Use cached template instead of reading from disk
     if not templateCache.hasKey(templateFile):
-      error &"Template file not found in cache: {templateFile}"
+      raise newException(BuildError,
+          &"Template file not found in cache: {templateFile}")
     let templateContent = templateCache[templateFile]
     var context = initTable[string, string]()
     # A page without a `title` frontmatter falls back to a title derived from
@@ -1124,7 +1155,7 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
 
     result.html = renderTemplate(templateContent, context)
   else:
-    error "Expected template file"
+    raise newException(BuildError, "Expected template file")
 
   result.sitemapUrl = sitemapUrl
   result.keepMarkdown = keepMarkdown
@@ -1443,12 +1474,14 @@ proc main(doReload: bool) =
 
   try:
     removeDir("public")
-  except Exception:
-    discard
+  except OSError as e:
+    warn &"Warning: could not fully remove public/, stale files may remain: {e.msg}"
+  if not dirExists("src"):
+    error "Expected a src directory"
   try:
     copyDir("src", "public")
-  except Exception:
-    error "Expected a src directory"
+  except OSError as e:
+    error &"Could not copy src/ to public/: {e.msg}"
 
   # Load templates and components into cache at startup
   loadTemplates()
@@ -1730,8 +1763,8 @@ proc rebuild(doReload: bool) =
   stdout.resetAttributes()
   try:
     main(doReload)
-  except:
-    stderr.styledWriteLine(fgRed, "Build failed: " & getCurrentExceptionMsg())
+  except CatchableError as e:
+    stderr.styledWriteLine(fgRed, "Build failed: " & e.msg)
     stderr.resetAttributes()
 
 # --- Smart rebuilds for `hunim server` ----------------------------------------
@@ -1995,7 +2028,10 @@ when isMainModule:
       cmd2 = paramStr(i)
 
   if cmd == "" or cmd == "build":
-    main(doReload=false)
+    try:
+      main(doReload=false)
+    except CatchableError as e:
+      error "Build failed: " & e.msg
   elif cmd == "version":
     echo version
   elif cmd == "newsite":

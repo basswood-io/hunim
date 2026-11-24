@@ -1,4 +1,9 @@
-# 0.6.2
+# 0.6.3
 
 ## Fixes
- - A Markdown home page (`src/index.md`) now gets the site root as its canonical URL, `og:url`, and `sitemap.xml` entry instead of `/index` (#10)
+ - A component no longer expands inside a longer tag that starts with its name (component `nav` no longer replaces `{{ navbar }}`)
+ - A failing Markdown page no longer crashes the build; every failing page is reported by file
+ - A malformed `date:` in frontmatter now gives a clear error instead of a stack trace
+ - A failing `{{ exec }}` script is now reported cleanly instead of exiting from a worker thread
+ - Markdown output is no longer silently truncated when memory runs out, and the md4c output buffer no longer leaks on failure
+ - A failure to remove the old `public/` directory now prints a warning instead of being ignored
