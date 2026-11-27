@@ -11,3 +11,6 @@
  - On Windows, a feed's index page now gets its `{{ .PostList }}` and RSS autodiscovery link
  - On Windows, HTML pages are no longer listed in `sitemap.xml` with a `public\` prefix
  - On Windows, editing a feed post under `hunim server` no longer drops the feed template and breaks the RSS link
+ - A feed post without a `date` no longer fails the build; it sorts last, as documented
+ - An invalid `date:` error now names the file
+ - `{{ .Date }}` and `{{ .Author }}` now work on every Markdown page, not only feed posts, and are empty rather than left as literal text when unset

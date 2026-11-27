@@ -35,8 +35,8 @@ Create `templates/default.html` and it will be applied to every Markdown file th
 <tbody>
 <tr><td><code>&#123;&#123; .Content &#125;&#125;</code></td><td>The rendered HTML from the Markdown file.</td></tr>
 <tr><td><code>&#123;&#123; .Title &#125;&#125;</code></td><td>The <code>title</code> field from frontmatter.</td></tr>
-<tr><td><code>&#123;&#123; .Date &#125;&#125;</code></td><td>The formatted date (e.g. <code>November 19, 2024</code>). Only set for feed posts.</td></tr>
-<tr><td><code>&#123;&#123; .Author &#125;&#125;</code></td><td>The <code>author</code> field from frontmatter. Only set for feed posts.</td></tr>
+<tr><td><code>&#123;&#123; .Date &#125;&#125;</code></td><td>The formatted date (e.g. <code>November 19, 2024</code>), from the <code>date</code> field in frontmatter. Empty when the page has no date.</td></tr>
+<tr><td><code>&#123;&#123; .Author &#125;&#125;</code></td><td>The <code>author</code> field from frontmatter. Empty when the page has no author.</td></tr>
 <tr><td><code>&#123;&#123; with .PrevInSection &#125;&#125;...&#123;&#123; end &#125;&#125;</code></td><td>For feed posts, renders the block only when an older neighboring post exists. Inside the block, use <code>&#123;&#123; .RelPermalink &#125;&#125;</code> and <code>&#123;&#123; .Title &#125;&#125;</code>.</td></tr>
 <tr><td><code>&#123;&#123; with .NextInSection &#125;&#125;...&#123;&#123; end &#125;&#125;</code></td><td>For feed posts, renders the block only when a newer neighboring post exists. Inside the block, use <code>&#123;&#123; .RelPermalink &#125;&#125;</code> and <code>&#123;&#123; .Title &#125;&#125;</code>.</td></tr>
 <tr><td><code>&#123;&#123; range .Pages &#125;&#125;...&#123;&#123; end &#125;&#125;</code></td><td>Repeats the block once per page on the site. Inside the block, use <code>&#123;&#123; .RelPermalink &#125;&#125;</code> and <code>&#123;&#123; .Title &#125;&#125;</code>. See <a href="#navigation-menus">Navigation menus</a>.</td></tr>

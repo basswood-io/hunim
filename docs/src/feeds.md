@@ -115,7 +115,7 @@ desc: An introduction to my new blog.
 Content goes here.
 ```
 
-Posts without a `date` appear at the end of the list (after all dated posts).
+Posts without a `date` appear at the end of the list (after all dated posts), with no date shown and no `pubDate` in the RSS feed.
 
 ### Excluding a post
 

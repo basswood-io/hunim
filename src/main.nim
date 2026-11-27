@@ -123,19 +123,20 @@ proc loadTemplates() =
     if kind == pcFile and not tmplName.startsWith("."):
       templateCache[tmplName] = readFile(tmpl)
 
-proc parseDate(date: string): DateTime =
-  # Parse RFC 2822 dates
+proc parseDate(file, date: string): DateTime =
+  ## Parse the RFC 2822 `date` frontmatter of `file`, which is named in errors.
+  const expected = "expected 'ddd, dd MMM yyyy HH:mm:ss ZZZ'"
 
   let explode = rsplit(date, " ", 1)
   if explode.len < 2:
-    error &"Invalid date (expected 'ddd, dd MMM yyyy HH:mm:ss ZZZ'): \"{date}\""
+    error &"{file}: Invalid date ({expected}): \"{date}\""
   let date2 = explode[0]
   let timezone = explode[1]
 
   try:
     result = parse(date2, "ddd, dd MMM yyyy HH:mm:ss")
   except TimeParseError:
-    error &"Invalid date (expected 'ddd, dd MMM yyyy HH:mm:ss ZZZ'): \"{date}\""
+    error &"{file}: Invalid date ({expected}): \"{date}\""
   case timezone
     of "EDT": result -= initDuration(hours = -4)
     of "EST": result -= initDuration(hours = -5)
@@ -149,7 +150,7 @@ proc parseDate(date: string): DateTime =
     of "AKST": result -= initDuration(hours = -9)
     of "HST": result -= initDuration(hours = -10)
     of "UTC": discard
-    else: error &"Unknown time zone: {timezone}"
+    else: error &"{file}: Unknown time zone: {timezone}"
 
   return result
 
@@ -668,8 +669,8 @@ type BlogPost = object
   link: string
   desc: string
   path: string      # For sorting by date
-  pubDate: string
-  dateObj: DateTime # For sorting
+  pubDate: string   # "" when the post has no date
+  dateObj: DateTime # For sorting; undated posts sort as the oldest
 
 proc parseFrontmatter(file: string): Table[string, string] =
   ## Parse optional `---`-delimited frontmatter into key/value pairs. Each line
@@ -721,7 +722,9 @@ proc extractMetadata(baseUrl, file: string,
     desc: frontmatter.getOrDefault("desc", ""),
     path: file,
     pubDate: date,
-    dateObj: parseDate(date),
+    dateObj:
+      if date == "": dateTime(1, mJan, 1, zone = utc())
+      else: parseDate(file, date),
   )
 
 proc nonFrontmatter(file: string): string =
@@ -757,6 +760,14 @@ proc formatDisplayDate(date: string): string =
     except TimeParseError:
       raise newException(BuildError, msg)
 
+proc addDateAuthor(context: var Table[string, string],
+    frontmatter: Table[string, string]) =
+  ## Bind {{ .Date }} and {{ .Author }} from frontmatter. Both are empty when
+  ## unset, so neither is left as a literal placeholder.
+  let date = frontmatter.getOrDefault("date", "")
+  context["Date"] = (if date == "": "" else: formatDisplayDate(date))
+  context["Author"] = frontmatter.getOrDefault("author", "")
+
 proc renderInline(text: string): string =
   ## Render inline markdown (e.g. backticks in a title) and strip the wrapping
   ## paragraph so it can be embedded inside another element.
@@ -787,8 +798,10 @@ proc generatePostList(baseUrl: string, posts: seq[BlogPost]): string =
   var lines: seq[string] = @[]
   for post in posts:
     let href = post.link.replace(baseUrl, "/")
-    let displayDate = formatDisplayDate(post.pubDate)
-    lines.add(&"<p><a href=\"{href}\">{renderInline(post.title)}</a> {displayDate}</p>")
+    var line = &"<p><a href=\"{href}\">{renderInline(post.title)}</a>"
+    if post.pubDate != "":
+      line &= " " & formatDisplayDate(post.pubDate)
+    lines.add(line & "</p>")
   return lines.join("\n")
 
 proc clearFeedPostNav(feedDir: string) =
@@ -857,12 +870,13 @@ proc generateRSSFeed(frontmatter: Table[string, string], lang, baseUrl,
       &"""{summary}<div style="margin-top: 50px; font-style: italic;"><strong><a href="{post.link}">Keep reading</a>.</strong></div>""")
     let itemTitle = xmltree.escape(post.title)
     let itemLink = xmltree.escape(post.link)
-    let pubDate = xmltree.escape(post.pubDate)
+    let pubDate =
+      if post.pubDate == "": ""
+      else: &"\n      <pubDate>{xmltree.escape(post.pubDate)}</pubDate>"
     rssContent &= &"""    <item>
       <title>{itemTitle}</title>
       <link>{itemLink}</link>
-      <guid>{itemLink}</guid>
-      <pubDate>{pubDate}</pubDate>
+      <guid>{itemLink}</guid>{pubDate}
       <description>{description}</description>
     </item>
 """
@@ -1032,11 +1046,8 @@ proc renderMarkdownSource(job: ConvertJob,
     var context = initTable[string, string]()
     context["Lang"] = job.lang
     context["Title"] = titleOf(job.file, frontmatter)
-    # Feed posts expose Date/Author in their templates; mirror that in the body.
-    if job.feedDir != "" and frontmatter.hasKey("date"):
-      context["Date"] = formatDisplayDate(frontmatter["date"])
-      if frontmatter.hasKey("author"):
-        context["Author"] = frontmatter["author"]
+    # Templates expose Date/Author; mirror that in the body.
+    addDateAuthor(context, frontmatter)
     body = expandMarkdown(body, context)
   return body
 
@@ -1131,10 +1142,7 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
     # A page without a `title` frontmatter falls back to a title derived from
     # its filename, so `{{ .Title }}` is never left as a literal placeholder.
     context["Title"] = titleOf(job.file, frontmatter)
-    if job.feedDir != "" and frontmatter.hasKey("date"):
-      context["Date"] = formatDisplayDate(frontmatter["date"])
-      if frontmatter.hasKey("author"):
-        context["Author"] = frontmatter["author"]
+    addDateAuthor(context, frontmatter)
     if job.feedDir != "":
       let nav = feedPostNav.getOrDefault(job.file, (
         prevTitle: "", prevRelPermalink: "",
