@@ -621,7 +621,7 @@ proc processFile(path: string, baseUrl: string, doReload: bool, lang: string,
 
   var outputPath = path
   if not path.endsWith("index.html"):
-    outputPath = path.splitFile().dir / path.splitFile().name
+    outputPath = path.changeFileExt("")
 
   writeFile(outputPath, content)
 
@@ -1070,8 +1070,9 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
     htmlContent = htmlContent.replace("href=\"./", "href=\"" & dir)
 
   # Inject the generated list of posts into a feed's index page
-  if job.path.endsWith("/index.html") and feedPostLists.hasKey(job.path.parentDir):
-    let postList = feedPostLists[job.path.parentDir]
+  let pageDir = toUnixPath(job.path.parentDir)
+  if job.path.endsWith("/index.html") and feedPostLists.hasKey(pageDir):
+    let postList = feedPostLists[pageDir]
     htmlContent = htmlContent.replace("<p>{{ .PostList }}</p>", postList)
     htmlContent = htmlContent.replace("{{ .PostList }}", postList)
 
@@ -1103,8 +1104,8 @@ proc renderConvertedMarkdown(job: ConvertJob, htmlOutput: string): PageResult =
     sitemapUrl = job.baseUrl & url
 
     var feedDir = job.feedDir
-    if feedDir == "" and feedRegistry.hasKey(job.path.parentDir):
-      feedDir = job.path.parentDir
+    if feedDir == "" and feedRegistry.hasKey(pageDir):
+      feedDir = pageDir
     if feedRegistry.hasKey(feedDir):
       let feedTitle = xmltree.escape(feedRegistry[feedDir])
       let feedHref = xmltree.escape(job.baseUrl & feedDir.replace("public/", "") & "/index.xml")
@@ -1425,7 +1426,7 @@ proc feedDirOf(srcPage: string): string =
   ## that index.md itself.
   if not srcPage.endsWith(".md"):
     return ""
-  let dir = srcPage.parentDir
+  let dir = toUnixPath(srcPage.parentDir)
   let indexFile = dir / "index.md"
   if fileExists(indexFile) and
       looseFrontmatter(indexFile).getOrDefault("type", "") == "feed":

@@ -23,7 +23,7 @@ task make, "Export the project":
   if not dirExists("lib/md4c"):
     exec "git clone https://github.com/mity/md4c lib/md4c"
 
-  exec "nim c -d:danger --opt:size --panics:on --passC:-flto --passL:-flto --passC:-Ilib/md4c/src --out:hunim src/main.nim"
+  exec "nim c -d:danger -d:useMalloc --opt:size --panics:on --passC:-flto --passL:-flto --passC:-Ilib/md4c/src --out:hunim src/main.nim"
   when defined(macosx):
     exec "strip -ur hunim"
     exec "stat -f \"%z bytes\" ./hunim"
@@ -37,7 +37,7 @@ task makewinarm, "Cross-compile to Windows ARM64 (requires llvm-mingw)":
   if not dirExists("lib/md4c"):
     exec "git clone https://github.com/mity/md4c lib/md4c"
 
-  exec "nim c -d:danger --opt:size --panics:on --passC:-flto --passL:-flto --passL:-static --passC:-Ilib/md4c/src " &
+  exec "nim c -d:danger -d:useMalloc --opt:size --panics:on --passC:-flto --passL:-flto --passL:-static --passC:-Ilib/md4c/src " &
        "--os:windows --cpu:arm64 --cc:clang " &
        "--clang.exe:aarch64-w64-mingw32-clang " &
        "--clang.linkerexe:aarch64-w64-mingw32-clang " &
