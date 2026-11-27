@@ -1,5 +1,5 @@
 # Package
-version       = "0.6.2"
+version       = "0.6.3"
 author        = "WyattBlue"
 description   = "Awesome static site generator for humans"
 license       = "Unlicense"
